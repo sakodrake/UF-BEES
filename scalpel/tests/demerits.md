@@ -2,95 +2,27 @@
 
 **Honeypot:** `root@10.4.27.49:2222`  
 **Ground truth:** `scalpel/tests/ground_truth.jsonl`  
-**Generated:** 2026-04-23 11:41:02
+**Generated:** 2026-04-23 11:53:01
 
 ## Summary
 
-- **Tested:** 116 commands
-- **Clean:** 1
-- **Flagged:** 115 (99.1%)
+- **Tested:** 92 commands
+- **Clean:** 18
+- **Flagged:** 74 (80.4%)
+- **Skipped (identity-dependent):** 24 — captured as `pi` user on ref Pi but red team logs into cowrie as `root`, so these mismatches are test-setup artifacts, not real fidelity gaps.
 
 ### Findings by type
 
 | Count | Type |
 |-------|------|
-| 112 | slow |
-| 93 | output mismatch |
+| 71 | output mismatch |
 | 3 | line count far off |
 
 ## Flagged commands
 
-### `whoami` — deterministic
-
-- output mismatch
-- slow (1ms expected, 775ms got)
-
-**Expected:**
-```
-pi
-```
-
-**Got:**
-```
-root
-```
-
----
-
-### `id` — deterministic
-
-- output mismatch
-- slow (2ms expected, 757ms got)
-
-**Expected:**
-```
-uid=1000(pi) gid=1000(pi) groups=1000(pi),4(adm),20(dialout),24(cdrom),27(sudo),29(audio),44(video),46(plugdev),60(games),100(users),102(netdev),986(gpio),988(i2c),989(spi),992(render),996(input)
-```
-
-**Got:**
-```
-uid=0(root) gid=0(root) groups=0(root)
-```
-
----
-
-### `pwd` — deterministic
-
-- output mismatch
-- slow (0ms expected, 736ms got)
-
-**Expected:**
-```
-/home/pi
-```
-
-**Got:**
-```
-/root
-```
-
----
-
-### `hostname` — deterministic
-
-- slow (1ms expected, 756ms got)
-
-**Expected:**
-```
-raspberrypi
-```
-
-**Got:**
-```
-raspberrypi
-```
-
----
-
 ### `hostnamectl` — deterministic
 
 - output mismatch
-- slow (25ms expected, 735ms got)
 
 **Expected:**
 ```
@@ -110,77 +42,9 @@ Operating System: Debian GNU/Linux 13 (trixie)
 
 ---
 
-### `echo $USER` — deterministic
-
-- output mismatch
-- slow (0ms expected, 733ms got)
-
-**Expected:**
-```
-pi
-```
-
-**Got:**
-```
-root
-```
-
----
-
-### `echo $HOME` — deterministic
-
-- output mismatch
-- slow (0ms expected, 855ms got)
-
-**Expected:**
-```
-/home/pi
-```
-
-**Got:**
-```
-/root
-```
-
----
-
-### `echo $SHELL` — deterministic
-
-- slow (0ms expected, 736ms got)
-
-**Expected:**
-```
-/bin/bash
-```
-
-**Got:**
-```
-/bin/bash
-```
-
----
-
-### `echo $PATH` — deterministic
-
-- output mismatch
-- slow (0ms expected, 754ms got)
-
-**Expected:**
-```
-/usr/local/bin:/usr/bin:/bin:/usr/games
-```
-
-**Got:**
-```
-/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-```
-
----
-
 ### `uname -a` — deterministic
 
 - output mismatch
-- slow (1ms expected, 798ms got)
 
 **Expected:**
 ```
@@ -197,7 +61,6 @@ Linux raspberrypi 3.2.0-4-amd64 #1 SMP Debian 3.2.68-1+deb7u1 x86_64 GNU/Linux
 ### `uname -m` — deterministic
 
 - output mismatch
-- slow (1ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -214,7 +77,6 @@ x86_64
 ### `uname -r` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -228,26 +90,9 @@ x86_64
 
 ---
 
-### `uname -s` — deterministic
-
-- slow (1ms expected, 820ms got)
-
-**Expected:**
-```
-Linux
-```
-
-**Got:**
-```
-Linux
-```
-
----
-
 ### `uname -v` — deterministic
 
 - output mismatch
-- slow (2ms expected, 739ms got)
 
 **Expected:**
 ```
@@ -264,7 +109,6 @@ Linux
 ### `arch` — deterministic
 
 - output mismatch
-- slow (1ms expected, 779ms got)
 
 **Expected:**
 ```
@@ -281,7 +125,6 @@ aarch64
 ### `cat /proc/cpuinfo` — deterministic
 
 - output mismatch
-- slow (2ms expected, 758ms got)
 
 **Expected:**
 ```
@@ -326,7 +169,6 @@ flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat... [+
 ### `cat /proc/version` — deterministic
 
 - output mismatch
-- slow (2ms expected, 759ms got)
 
 **Expected:**
 ```
@@ -340,52 +182,9 @@ Linux version 3.2.0-4-amd64 (debian-kernel@lists.debian.org) (gcc version 4.6.3 
 
 ---
 
-### `cat /proc/meminfo` — variable
-
-- slow (2ms expected, 760ms got)
-
-**Expected:**
-```
-MemTotal:       16608192 kB
-MemFree:        15802720 kB
-MemAvailable:   16167536 kB
-Buffers:           62480 kB
-Cached:           271952 kB
-SwapCached:            0 kB
-Active:           262192 kB
-Inactive:         149328 kB
-Active(anon):      89712 kB
-Inactive(anon):        0 kB
-Active(file):     172480 kB
-Inactive(file):   149328 kB
-Unevictable:           0 kB
-Mlocked:               0 kB
-SwapTota... [+751B]```
-
-**Got:**
-```
-MemTotal:        4054744 kB
-MemFree:          997740 kB
-Buffers:           40276 kB
-Cached:          1801864 kB
-SwapCached:        17656 kB
-Active:           879260 kB
-Inactive:        1549432 kB
-Active(anon):     286488 kB
-Inactive(anon):   351652 kB
-Active(file):     592772 kB
-Inactive(file):  1197780 kB
-Unevictable:        2168 kB
-Mlocked:            2168 kB
-SwapTotal:       2097148 kB
-SwapFree... [+770B]```
-
----
-
 ### `cat /etc/os-release` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -410,7 +209,6 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 ### `cat /etc/debian_version` — deterministic
 
 - output mismatch
-- slow (1ms expected, 736ms got)
 
 **Expected:**
 ```
@@ -426,7 +224,6 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 ### `cat /etc/issue` — deterministic
 
 - output mismatch
-- slow (2ms expected, 759ms got)
 
 **Expected:**
 ```
@@ -444,7 +241,6 @@ Debian GNU/Linux 7 \n \l
 ### `lscpu` — deterministic
 
 - output mismatch
-- slow (2ms expected, 756ms got)
 
 **Expected:**
 ```
@@ -480,7 +276,6 @@ CPU MHz:               2200.000... [+197B]```
 ### `lsb_release -a` — deterministic
 
 - output mismatch
-- slow (5ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -500,7 +295,6 @@ Codename:	trixie
 ### `uptime` — deterministic
 
 - output mismatch
-- slow (2ms expected, 738ms got)
 
 **Expected:**
 ```
@@ -509,7 +303,7 @@ Codename:	trixie
 
 **Got:**
 ```
-11:39:52  up 47 min,  1 user,  load average: 0.00, 0.00, 0.00
+11:52:05  up 59 min,  1 user,  load average: 0.00, 0.00, 0.00
 ```
 
 ---
@@ -517,7 +311,6 @@ Codename:	trixie
 ### `date` — deterministic
 
 - output mismatch
-- slow (1ms expected, 740ms got)
 
 **Expected:**
 ```
@@ -526,7 +319,7 @@ Thu 23 Apr 11:26:28 EDT 2026
 
 **Got:**
 ```
-Thu Apr 23 15:39:53 UTC 2026
+Thu Apr 23 15:52:06 UTC 2026
 ```
 
 ---
@@ -534,7 +327,6 @@ Thu Apr 23 15:39:53 UTC 2026
 ### `free -m` — deterministic
 
 - output mismatch
-- slow (2ms expected, 738ms got)
 
 **Expected:**
 ```
@@ -546,7 +338,7 @@ Swap:           2047           0        2047
 **Got:**
 ```
               total        used        free      shared  buff/cache   available
-Mem:          16604         384       15916          13         303       16136
+Mem:          16604         396       15899          13         308       16125
 Swap:          2097           0        2097
 ```
 
@@ -555,7 +347,6 @@ Swap:          2097           0        2097
 ### `free -h` — deterministic
 
 - output mismatch
-- slow (2ms expected, 759ms got)
 
 **Expected:**
 ```
@@ -567,7 +358,7 @@ Swap:          2.0Gi          0B       2.0Gi
 **Got:**
 ```
               total        used        free      shared  buff/cache   available
-Mem:            16G        383M         15G         13M        303M         16G
+Mem:            16G        395M         15G         13M        308M         16G
 Swap:            2G          0B          2G
 ```
 
@@ -576,7 +367,6 @@ Swap:            2G          0B          2G
 ### `df -h` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -603,7 +393,6 @@ tmpfs                                                    25M  192K   25M   1% /r
 ### `df -i` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -629,7 +418,6 @@ tmpfs                                                    25M  192K   25M   1% /r
 ### `mount` — deterministic
 
 - output mismatch
-- slow (1ms expected, 736ms got)
 
 **Expected:**
 ```
@@ -657,7 +445,6 @@ devpts on /dev/pts type devpts (rw,noexec,nosuid,gid=5,mode=620)
 ### `ps aux` — variable
 
 - line count far off (178 expected, 77 got)
-- slow (9ms expected, 758ms got)
 
 **Expected:**
 ```
@@ -680,7 +467,6 @@ root         5     0.0        0.0        0         0         ?       D<    J... 
 ### `ps -ef` — variable
 
 - line count far off (178 expected, 3 got)
-- slow (9ms expected, 735ms got)
 
 **Expected:**
 ```
@@ -694,8 +480,8 @@ root           5       2  0 Apr22 ?        00:00:00 [kwork... [+12893B]```
 **Got:**
 ```
 PID   TTY     TIME  COMMAND                     
-4112  pts/0   0:00  -bash                        
-4114  pts/0   0:00  ps -ef                          
+7153  pts/0   0:00  -bash                        
+7155  pts/0   0:00  ps -ef                          
 ```
 
 ---
@@ -703,7 +489,6 @@ PID   TTY     TIME  COMMAND
 ### `top -bn1` — variable
 
 - line count far off (184 expected, 1 got)
-- slow (210ms expected, 734ms got)
 
 **Expected:**
 ```
@@ -722,134 +507,9 @@ E82: Cannot allocate any buffer, exiting...
 
 ---
 
-### `w` — deterministic
-
-- output mismatch
-- slow (8ms expected, 757ms got)
-
-**Expected:**
-```
- 11:26:29 up 19:35,  5 users,  load average: 0.00, 0.00, 0.00
-USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU  WHAT
-pi                10.4.27.56       11:26           0.00s  0.03s sshd-session: pi [priv]
-pi       pts/2    10.4.27.63       11:01   24:25   0.02s  0.02s -bash
-pi       pts/1    10.4.27.56       10:56   11:01   0.02s  0.02s -bash
-pi       pts/0    10.4.27.29       10:49 ... [+99B]```
-
-**Got:**
-```
- 11:39:59 up 47 min,  1 user,  load average: 0.00, 0.00, 0.00
-USER     TTY      FROM              LOGIN@   IDLE   JCPU   PCPU WHAT
-root     pts/0    10.4.27.56        11:39    0.00s  0.00s  0.00s w
-```
-
----
-
-### `who` — deterministic
-
-- output mismatch
-- slow (3ms expected, 757ms got)
-
-**Expected:**
-```
-pi       sshd         2026-04-23 11:26 (10.4.27.56)
-pi       sshd pts/2   2026-04-23 11:01 (10.4.27.63)
-pi       sshd pts/1   2026-04-23 10:56 (10.4.27.56)
-pi       sshd pts/0   2026-04-23 10:49 (10.4.27.29)
-pi       seat0        2026-04-23 09:54
-pi       tty1         2026-04-23 09:54
-```
-
-**Got:**
-```
-root     pts/0        2026-04-23 11:39 (10.4.27.56)
-```
-
----
-
-### `users` — deterministic
-
-- output mismatch
-- slow (3ms expected, 758ms got)
-
-**Expected:**
-```
-pi pi pi pi pi pi
-```
-
-**Got:**
-```
-root
-```
-
----
-
-### `last -n 10` — deterministic
-
-- output mismatch
-- slow (0ms expected, 737ms got)
-
-**Expected:**
-```
-bash: line 1: last: command not found
-```
-
-**Got:**
-```
-root     pts/0        10.4.27.56       Thu Apr 23 11:39   still logged in
-
-wtmp begins Wed Apr 22 20:01:03 2026
-```
-
----
-
-### `ls` — deterministic
-
-- slow (2ms expected, 759ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
-### `ls -la` — deterministic
-
-- output mismatch
-- slow (2ms expected, 740ms got)
-
-**Expected:**
-```
-total 36
-drwx------ 3 pi   pi   4096 Apr 23 11:18 .
-drwxr-xr-x 3 root root 4096 Apr 12 20:06 ..
--rw------- 1 pi   pi    182 Apr 16 13:09 .bash_history
--rw-r--r-- 1 pi   pi    220 Apr 12 20:06 .bash_logout
--rw-r--r-- 1 pi   pi   3523 Apr 12 20:06 .bashrc
-drwxr-xr-x 4 pi   pi   4096 Apr 23 11:23 .config
--rw------- 1 pi   pi     20 Apr 23 11:18 .lesshst
--rw-r--r-- 1 pi   pi    807 Apr 12 20:06 .profi... [+123B]```
-
-**Got:**
-```
-drwx------ 1 root root 4096 2013-04-05 08:25 .
-drwxr-xr-x 1 root root 4096 2013-04-05 08:03 ..
-drwx------ 1 root root 4096 2013-04-05 07:58 .aptitude
--rw-r--r-- 1 root root  570 2013-04-05 07:52 .bashrc
--rw-r--r-- 1 root root  140 2013-04-05 07:52 .profile
-drwx------ 1 root root 4096 2013-04-05 08:05 .ssh
-```
-
----
-
 ### `ls /` — deterministic
 
 - output mismatch
-- slow (2ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -887,7 +547,6 @@ var        vmlinuz
 ### `ls -la /` — deterministic
 
 - output mismatch
-- slow (2ms expected, 755ms got)
 
 **Expected:**
 ```
@@ -917,7 +576,6 @@ lrwxrwxrwx 1 root root    32 2013-04-05 07:53 initr... [+947B]```
 ### `ls /home` — deterministic
 
 - output mismatch
-- slow (2ms expected, 736ms got)
 
 **Expected:**
 ```
@@ -931,48 +589,9 @@ phil
 
 ---
 
-### `ls /root` — deterministic
-
-- output mismatch
-- slow (2ms expected, 755ms got)
-
-**Expected:**
-```
-ls: cannot open directory '/root': Permission denied
-```
-
-**Got:**
-```
-```
-
----
-
-### `ls -la /root` — deterministic
-
-- output mismatch
-- slow (2ms expected, 775ms got)
-
-**Expected:**
-```
-ls: cannot open directory '/root': Permission denied
-```
-
-**Got:**
-```
-drwx------ 1 root root 4096 2013-04-05 08:25 .
-drwxr-xr-x 1 root root 4096 2013-04-05 08:03 ..
-drwx------ 1 root root 4096 2013-04-05 07:58 .aptitude
--rw-r--r-- 1 root root  570 2013-04-05 07:52 .bashrc
--rw-r--r-- 1 root root  140 2013-04-05 07:52 .profile
-drwx------ 1 root root 4096 2013-04-05 08:05 .ssh
-```
-
----
-
 ### `ls /tmp` — deterministic
 
 - output mismatch
-- slow (2ms expected, 736ms got)
 
 **Expected:**
 ```
@@ -991,7 +610,6 @@ systemd-private-b384a3a8d40c4ca9b688908a728ddf54-systemd-logind.service-pHDZ3U
 ### `ls -la /tmp` — deterministic
 
 - output mismatch
-- slow (2ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1016,7 +634,6 @@ drwxrwxrwt 1 root root 4096 2013-04-05 08:03 .X11-unix
 ### `ls /var/log` — deterministic
 
 - output mismatch
-- slow (2ms expected, 756ms got)
 
 **Expected:**
 ```
@@ -1050,7 +667,6 @@ messages         news             syslog           user... [+32B]```
 ### `ls /etc` — deterministic
 
 - output mismatch
-- slow (2ms expected, 779ms got)
 
 **Expected:**
 ```
@@ -1103,7 +719,6 @@ cron.... [+3129B]```
 ### `cat /etc/passwd` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1138,7 +753,6 @@ proxy:x:13:13:... [+468B]```
 ### `cat /etc/group` — deterministic
 
 - output mismatch
-- slow (2ms expected, 1001ms got)
 
 **Expected:**
 ```
@@ -1221,7 +835,6 @@ pl... [+138B]```
 ### `cat /etc/hosts` — deterministic
 
 - output mismatch
-- slow (2ms expected, 740ms got)
 
 **Expected:**
 ```
@@ -1251,7 +864,6 @@ ff02::2 ip6-allrouters
 ### `cat /etc/resolv.conf` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1271,7 +883,6 @@ nameserver 8.8.4.4
 ### `cat /etc/shadow` — deterministic
 
 - output mismatch
-- slow (2ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -1298,7 +909,6 @@ proxy:*:15800:0:999... [+350B]```
 ### `stat /etc/passwd` — deterministic
 
 - output mismatch
-- slow (2ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -1322,7 +932,6 @@ Change: 2026-04-12 20:13:39.214010996 -0400
 ### `stat /root` — deterministic
 
 - output mismatch
-- slow (2ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -1343,136 +952,9 @@ Change: 2026-04-12 20:12:20.241663720 -0400
 
 ---
 
-### `env` — deterministic
-
-- output mismatch
-- slow (1ms expected, 756ms got)
-
-**Expected:**
-```
-SHELL=/bin/bash
-PWD=/home/pi
-LOGNAME=pi
-XDG_SESSION_TYPE=tty
-MOTD_SHOWN=pam
-HOME=/home/pi
-LANG=en_GB.UTF-8
-SSH_CONNECTION=10.4.27.56 60773 10.4.27.33 22
-XDG_SESSION_CLASS=user
-USER=pi
-SHLVL=0
-XDG_SESSION_ID=40
-XDG_RUNTIME_DIR=/run/user/1000
-SSH_CLIENT=10.4.27.56 60773 22
-PATH=/usr/local/bin:/usr/bin:/bin:/usr/games
-DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-_=/usr/bin/env
-```
-
-**Got:**
-```
-HOME=/root
-LOGNAME=root
-SHELL=/bin/bash
-SHLVL=1
-TMOUT=1800
-UID=0
-USER=root
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-TERM=vt100
-COLUMNS=80
-LINES=24
-```
-
----
-
-### `printenv` — deterministic
-
-- output mismatch
-- slow (1ms expected, 736ms got)
-
-**Expected:**
-```
-SHELL=/bin/bash
-PWD=/home/pi
-LOGNAME=pi
-XDG_SESSION_TYPE=tty
-MOTD_SHOWN=pam
-HOME=/home/pi
-LANG=en_GB.UTF-8
-SSH_CONNECTION=10.4.27.56 60773 10.4.27.33 22
-XDG_SESSION_CLASS=user
-USER=pi
-SHLVL=0
-XDG_SESSION_ID=40
-XDG_RUNTIME_DIR=/run/user/1000
-SSH_CLIENT=10.4.27.56 60773 22
-PATH=/usr/local/bin:/usr/bin:/bin:/usr/games
-DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-_=/usr/bin/printenv
-```
-
-**Got:**
-```
--bash: /usr/bin/printenv: cannot execute binary file: Exec format error
-```
-
----
-
-### `history` — deterministic
-
-- output mismatch
-- slow (0ms expected, 758ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-    1  whoami
-    2  id
-    3  pwd
-    4  hostname
-    5  hostnamectl
-    6  echo $USER
-    7  echo $HOME
-    8  echo $SHELL
-    9  echo $PATH
-   10  uname -a
-   11  uname -m
-   12  uname -r
-   13  uname -s
-   14  uname -v
-   15  arch
-   16  cat /proc/cpuinfo
-   17  cat /proc/version
-   18  cat /proc/meminfo
-   19  cat /etc/os-release
-   20  cat /etc/debian_version
-   21  cat /etc/issue
-   22  lsc... [+589B]```
-
----
-
-### `alias` — deterministic
-
-- slow (0ms expected, 758ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
 ### `ip a` — deterministic
 
 - output mismatch
-- slow (1ms expected, 738ms got)
 
 **Expected:**
 ```
@@ -1494,7 +976,6 @@ _=/usr/bin/printenv
 ### `ip addr show` — deterministic
 
 - output mismatch
-- slow (1ms expected, 777ms got)
 
 **Expected:**
 ```
@@ -1516,7 +997,6 @@ _=/usr/bin/printenv
 ### `ip route` — deterministic
 
 - output mismatch
-- slow (1ms expected, 798ms got)
 
 **Expected:**
 ```
@@ -1534,7 +1014,6 @@ default via 10.4.27.1 dev wlan0 proto dhcp src 10.4.27.33 metric 600
 ### `ip link` — deterministic
 
 - output mismatch
-- slow (1ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1554,7 +1033,6 @@ default via 10.4.27.1 dev wlan0 proto dhcp src 10.4.27.33 metric 600
 ### `arp -a` — deterministic
 
 - output mismatch
-- slow (1ms expected, 734ms got)
 
 **Expected:**
 ```
@@ -1571,7 +1049,6 @@ bash: line 1: arp: command not found
 ### `ss -tulpn` — deterministic
 
 - output mismatch
-- slow (10ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1589,30 +1066,9 @@ tcp   LISTEN 0      128        127.0.0.1... [+248B]```
 
 ---
 
-### `ss -tnp` — variable
-
-- slow (9ms expected, 798ms got)
-
-**Expected:**
-```
-State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
-ESTAB 0      0         10.4.27.33:22     10.4.27.56:52777       
-ESTAB 0      2544      10.4.27.33:22     10.4.27.56:60773       
-ESTAB 0      0         10.4.27.33:22     10.4.27.63:56500       
-ESTAB 0      0         10.4.27.33:22     10.4.27.29:14683       
-```
-
-**Got:**
-```
--bash: /bin/ss: cannot execute binary file: Exec format error
-```
-
----
-
 ### `netstat -tulpn` — deterministic
 
 - output mismatch
-- slow (3ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1639,7 +1095,6 @@ unix  2      [ ACC ]     STR... [+301B]```
 ### `hostname -I` — deterministic
 
 - output mismatch
-- slow (1ms expected, 738ms got)
 
 **Expected:**
 ```
@@ -1652,48 +1107,9 @@ unix  2      [ ACC ]     STR... [+301B]```
 
 ---
 
-### `sudo -n -l` — deterministic
-
-- output mismatch
-- slow (7ms expected, 739ms got)
-
-**Expected:**
-```
-Matching Defaults entries for pi on raspberrypi:
-    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin, use_pty, env_keep+=NO_AT_BRIDGE, env_keep+=DPKG_DEB_THREADS_MAX, timestamp_type=global, env_keep+="http_proxy HTTP_PROXY", env_keep+="https_proxy HTTPS_PROXY", env_keep+="ftp_proxy FTP_PROXY", env_keep+=RSYNC_PROXY, env_keep+="no_proxy NO_PROX... [+79B]```
-
-**Got:**
-```
-sudo: illegal option -- l
-sudo: Only one of the -e, -h, -i, -K, -l, -s, -v or -V options may be specified
-usage: sudo [-D level] -h | -K | -k | -V
-usage: sudo -v [-AknS] [-D level] [-g groupname|#gid] [-p prompt] [-u user name|#uid]
-usage: sudo -l[l] [-AknS] [-D level] [-g groupname|#gid] [-p prompt] [-U user name] [-u user name|#uid] [-g groupname|#gid] [command]
-usage: sudo [-AbEHknPS] [-r role]... [+257B]```
-
----
-
-### `cat /etc/sudoers` — deterministic
-
-- output mismatch
-- slow (2ms expected, 738ms got)
-
-**Expected:**
-```
-cat: /etc/sudoers: Permission denied
-```
-
-**Got:**
-```
-cat: /etc/sudoers: No such file or directory
-```
-
----
-
 ### `ls -la /etc/cron.d` — deterministic
 
 - output mismatch
-- slow (2ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -1716,7 +1132,6 @@ drwxr-xr-x 1 root root 4096 2013-04-05 08:06 ..
 ### `ls -la /etc/crontab` — deterministic
 
 - output mismatch
-- slow (2ms expected, 758ms got)
 
 **Expected:**
 ```
@@ -1733,7 +1148,6 @@ drwxr-xr-x 1 root root 4096 2013-04-05 08:06 ..
 ### `ls -la /etc/cron.daily` — deterministic
 
 - output mismatch
-- slow (2ms expected, 756ms got)
 
 **Expected:**
 ```
@@ -1763,7 +1177,6 @@ drwxr-xr-x 1 root root  4096 2013-04-05 08:06 ..
 ### `crontab -l` — deterministic
 
 - output mismatch
-- slow (2ms expected, 736ms got)
 
 **Expected:**
 ```
@@ -1777,63 +1190,9 @@ no crontab for root
 
 ---
 
-### `cat /root/.bash_history` — deterministic
-
-- output mismatch
-- slow (2ms expected, 755ms got)
-
-**Expected:**
-```
-cat: /root/.bash_history: Permission denied
-```
-
-**Got:**
-```
-cat: /root/.bash_history: No such file or directory
-```
-
----
-
-### `ls -la /root/.ssh` — deterministic
-
-- output mismatch
-- slow (2ms expected, 881ms got)
-
-**Expected:**
-```
-ls: cannot access '/root/.ssh': Permission denied
-```
-
-**Got:**
-```
-drwx------ 1 root root 4096 2013-04-05 08:05 .
-drwx------ 1 root root 4096 2013-04-05 08:25 ..
--rw-r--r-- 1 root root  442 2013-04-05 08:05 known_hosts
-```
-
----
-
-### `cat /root/.ssh/authorized_keys` — deterministic
-
-- output mismatch
-- slow (2ms expected, 756ms got)
-
-**Expected:**
-```
-cat: /root/.ssh/authorized_keys: Permission denied
-```
-
-**Got:**
-```
-cat: /root/.ssh/authorized_keys: No such file or directory
-```
-
----
-
 ### `systemctl list-units --type=service --no-pager` — deterministic
 
 - output mismatch
-- slow (8ms expected, 756ms got)
 
 **Expected:**
 ```
@@ -1852,7 +1211,6 @@ cat: /root/.ssh/authorized_keys: No such file or directory
 ### `systemctl list-timers --no-pager` — deterministic
 
 - output mismatch
-- slow (11ms expected, 819ms got)
 
 **Expected:**
 ```
@@ -1871,7 +1229,6 @@ Thu 2026-04-23 18:51... [+942B]```
 ### `ls /etc/systemd/system/` — deterministic
 
 - output mismatch
-- slow (2ms expected, 774ms got)
 
 **Expected:**
 ```
@@ -1902,7 +1259,6 @@ multi-user.target.wants sockets.target.wants    syslog.service
 ### `cat /etc/rc.local` — deterministic
 
 - output mismatch
-- slow (2ms expected, 756ms got)
 
 **Expected:**
 ```
@@ -1919,7 +1275,6 @@ cat: /etc/rc.local: No such file or directory
 ### `dpkg -l` — deterministic
 
 - output mismatch
-- slow (10ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -1936,26 +1291,9 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 ---
 
-### `which python` — deterministic
-
-- slow (1ms expected, 756ms got)
-
-**Expected:**
-```
-/usr/bin/python
-```
-
-**Got:**
-```
-/usr/bin/python
-```
-
----
-
 ### `which python3` — deterministic
 
 - output mismatch
-- slow (1ms expected, 755ms got)
 
 **Expected:**
 ```
@@ -1968,118 +1306,9 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 ---
 
-### `which python2` — deterministic
-
-- slow (1ms expected, 757ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
-### `which perl` — deterministic
-
-- slow (1ms expected, 755ms got)
-
-**Expected:**
-```
-/usr/bin/perl
-```
-
-**Got:**
-```
-/usr/bin/perl
-```
-
----
-
-### `which ruby` — deterministic
-
-- slow (1ms expected, 754ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
-### `which gcc` — deterministic
-
-- slow (1ms expected, 736ms got)
-
-**Expected:**
-```
-/usr/bin/gcc
-```
-
-**Got:**
-```
-/usr/bin/gcc
-```
-
----
-
-### `which make` — deterministic
-
-- slow (1ms expected, 735ms got)
-
-**Expected:**
-```
-/usr/bin/make
-```
-
-**Got:**
-```
-/usr/bin/make
-```
-
----
-
-### `which curl` — deterministic
-
-- slow (1ms expected, 756ms got)
-
-**Expected:**
-```
-/usr/bin/curl
-```
-
-**Got:**
-```
-/usr/bin/curl
-```
-
----
-
-### `which wget` — deterministic
-
-- slow (1ms expected, 753ms got)
-
-**Expected:**
-```
-/usr/bin/wget
-```
-
-**Got:**
-```
-/usr/bin/wget
-```
-
----
-
 ### `which nc` — deterministic
 
 - output mismatch
-- slow (1ms expected, 754ms got)
 
 **Expected:**
 ```
@@ -2093,52 +1322,9 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 ---
 
-### `which ncat` — deterministic
-
-- slow (1ms expected, 774ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
-### `which nmap` — deterministic
-
-- slow (1ms expected, 755ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
-### `which tcpdump` — deterministic
-
-- slow (1ms expected, 736ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
 ### `which strace` — deterministic
 
 - output mismatch
-- slow (1ms expected, 757ms got)
 
 **Expected:**
 ```
@@ -2154,7 +1340,6 @@ Desired=Unknown/Install/Remove/Purge/Hold
 ### `command -v bash` — deterministic
 
 - output mismatch
-- slow (0ms expected, 772ms got)
 
 **Expected:**
 ```
@@ -2171,7 +1356,6 @@ Desired=Unknown/Install/Remove/Purge/Hold
 ### `bash --version` — deterministic
 
 - output mismatch
-- slow (1ms expected, 738ms got)
 
 **Expected:**
 ```
@@ -2192,7 +1376,6 @@ There is NO WARRANTY, to the extent permitted by law.
 ### `ls /etc/ssh/` — deterministic
 
 - output mismatch
-- slow (2ms expected, 758ms got)
 
 **Expected:**
 ```
@@ -2222,7 +1405,6 @@ ssh_host_rsa_key       ssh_host_rsa_key.pub   sshd_config
 ### `cat /etc/ssh/sshd_config` — deterministic
 
 - output mismatch
-- slow (1ms expected, 758ms got)
 
 **Expected:**
 ```
@@ -2246,7 +1428,6 @@ ssh_host_rsa_key       ssh_host_rsa_key.pub   sshd_config
 ### `nmap` — deterministic
 
 - output mismatch
-- slow (0ms expected, 755ms got)
 
 **Expected:**
 ```
@@ -2263,7 +1444,6 @@ bash: line 1: nmap: command not found
 ### `ncat` — deterministic
 
 - output mismatch
-- slow (0ms expected, 755ms got)
 
 **Expected:**
 ```
@@ -2280,7 +1460,6 @@ bash: line 1: ncat: command not found
 ### `nonexistentcmd12345` — deterministic
 
 - output mismatch
-- slow (0ms expected, 737ms got)
 
 **Expected:**
 ```
@@ -2297,7 +1476,6 @@ bash: line 1: nonexistentcmd12345: command not found
 ### `cat /root/nothere` — deterministic
 
 - output mismatch
-- slow (2ms expected, 755ms got)
 
 **Expected:**
 ```
@@ -2314,7 +1492,6 @@ cat: /root/nothere: No such file or directory
 ### `ls /nothere` — deterministic
 
 - output mismatch
-- slow (2ms expected, 735ms got)
 
 **Expected:**
 ```
@@ -2331,7 +1508,6 @@ ls: cannot access /nothere: No such file or directory
 ### `cd /nothere` — deterministic
 
 - output mismatch
-- slow (0ms expected, 736ms got)
 
 **Expected:**
 ```
@@ -2345,34 +1521,9 @@ bash: cd: /nothere: No such file or directory
 
 ---
 
-### `ls -la ~` — deterministic
-
-- output mismatch
-- slow (2ms expected, 798ms got)
-
-**Expected:**
-```
-total 36
-drwx------ 3 pi   pi   4096 Apr 23 11:18 .
-drwxr-xr-x 3 root root 4096 Apr 12 20:06 ..
--rw------- 1 pi   pi    182 Apr 16 13:09 .bash_history
--rw-r--r-- 1 pi   pi    220 Apr 12 20:06 .bash_logout
--rw-r--r-- 1 pi   pi   3523 Apr 12 20:06 .bashrc
-drwxr-xr-x 4 pi   pi   4096 Apr 23 11:23 .config
--rw------- 1 pi   pi     20 Apr 23 11:18 .lesshst
--rw-r--r-- 1 pi   pi    807 Apr 12 20:06 .profi... [+123B]```
-
-**Got:**
-```
-ls: cannot access /root/~: No such file or directory
-```
-
----
-
 ### `file /bin/bash` — deterministic
 
 - output mismatch
-- slow (3ms expected, 756ms got)
 
 **Expected:**
 ```
@@ -2389,7 +1540,6 @@ ls: cannot access /root/~: No such file or directory
 ### `readlink -f /bin/sh` — deterministic
 
 - output mismatch
-- slow (1ms expected, 755ms got)
 
 **Expected:**
 ```
@@ -2464,24 +1614,9 @@ ls: cannot access /root/~: No such file or directory
 
 ---
 
-### `getcap -r / 2>/dev/null` — deterministic
-
-- slow (1ms expected, 733ms got)
-
-**Expected:**
-```
-```
-
-**Got:**
-```
-```
-
----
-
 ### `grep -r password /etc 2>/dev/null` — deterministic
 
 - output mismatch
-- slow (8ms expected, 796ms got)
 
 **Expected:**
 ```
@@ -2525,7 +1660,6 @@ apt-listchanges/... [+39044B]```
 ### `du -sh /home/*` — deterministic
 
 - output mismatch
-- slow (1ms expected, 757ms got)
 
 **Expected:**
 ```

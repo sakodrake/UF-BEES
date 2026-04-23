@@ -37,6 +37,23 @@ except ImportError:
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 PROMPT_RE = re.compile(r"^[^#$\n]*[#$]\s*$")
 
+# Commands whose output depends on which user is logged in, whose home we're
+# in, or which sessions are active. Our ground truth was captured as `pi` on
+# the reference Pi, but the red team logs into cowrie as `root` — so a
+# "mismatch" on these is an artifact of our test setup, not a fidelity gap.
+# Skip them for now; re-capture as root-equivalent to revisit.
+IDENTITY_DEPENDENT = {
+    "whoami", "id", "pwd",
+    "echo $USER", "echo $HOME", "echo $PATH",
+    "ls", "ls -la", "ls ~", "ls -la ~",
+    "env", "printenv", "history", "alias",
+    "cat ~/.bash_history", "cat /root/.bash_history",
+    "ls /root", "ls -la /root", "ls -la /root/.ssh",
+    "cat /root/.ssh/authorized_keys", "cat /etc/sudoers",
+    "w", "who", "users", "last -n 10",
+    "sudo -n -l",
+}
+
 
 def load_ground_truth(path):
     by_cmd = defaultdict(list)
@@ -149,7 +166,9 @@ def diff_one(expected, actual, kind):
     if act_rc != -1 and exp_rc != act_rc:
         findings.append(f"exit code mismatch ({exp_rc} expected, {act_rc} got)")
 
-    if act_ns > exp_ns * 3 and act_ns > 100_000_000:
+    # In shell mode we can't measure command latency cleanly — the quiet_ms
+    # settle wait dominates. Only flag slow when we have a real rc (exec mode).
+    if act_rc != -1 and act_ns > exp_ns * 3 and act_ns > 100_000_000:
         findings.append(f"slow ({exp_ns // 1_000_000}ms expected, {act_ns // 1_000_000}ms got)")
 
     return findings
@@ -170,7 +189,13 @@ def write_markdown(path, demerits, finding_counts, total, meta):
         f.write(f"- **Tested:** {total} commands\n")
         f.write(f"- **Clean:** {total - len(demerits)}\n")
         pct = 100 * len(demerits) / total if total else 0
-        f.write(f"- **Flagged:** {len(demerits)} ({pct:.1f}%)\n\n")
+        f.write(f"- **Flagged:** {len(demerits)} ({pct:.1f}%)\n")
+        if meta.get("skipped"):
+            f.write(f"- **Skipped (identity-dependent):** {len(meta['skipped'])} "
+                    f"— captured as `pi` user on ref Pi but red team logs into "
+                    f"cowrie as `root`, so these mismatches are test-setup "
+                    f"artifacts, not real fidelity gaps.\n")
+        f.write("\n")
 
         f.write("### Findings by type\n\n")
         f.write("| Count | Type |\n|-------|------|\n")
@@ -218,9 +243,15 @@ def main():
 
     demerits = []
     finding_counts = defaultdict(int)
+    skipped = []
 
     with open(args.output, "w", encoding="utf-8") as out_f:
         for i, (cmd, records) in enumerate(by_cmd.items(), 1):
+            if cmd in IDENTITY_DEPENDENT:
+                skipped.append(cmd)
+                sys.stderr.write(f"[{i}/{len(by_cmd)}] {cmd!r:<60} SKIPPED (identity-dependent)\n")
+                continue
+
             kind, exp_out, exp_err, exp_rc, exp_ns = classify(records)
             expected = (exp_out, exp_err, exp_rc, exp_ns)
             try:
@@ -257,20 +288,24 @@ def main():
     client.close()
 
     total = len(by_cmd)
+    tested = total - len(skipped)
     bad = len(demerits)
     meta = {
         "host": args.honeypot, "port": args.port, "user": args.user,
         "input": args.input,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "skipped": skipped,
     }
-    write_markdown(args.markdown, demerits, finding_counts, total, meta)
+    write_markdown(args.markdown, demerits, finding_counts, tested, meta)
 
     print()
     print(f"=== summary ===")
-    print(f"commands tested:  {total}")
-    print(f"commands clean:   {total - bad}")
-    pct = 100 * bad / total if total else 0
-    print(f"commands flagged: {bad}  ({pct:.1f}%)")
+    print(f"commands in ground truth: {total}")
+    print(f"skipped (identity-dep):   {len(skipped)}")
+    print(f"commands tested:          {tested}")
+    print(f"commands clean:           {tested - bad}")
+    pct = 100 * bad / tested if tested else 0
+    print(f"commands flagged:         {bad}  ({pct:.1f}%)")
     print()
     print("findings by type:")
     for tag, count in sorted(finding_counts.items(), key=lambda x: -x[1]):
