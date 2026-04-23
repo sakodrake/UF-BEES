@@ -2,23 +2,43 @@
 
 **Honeypot:** `root@10.4.27.49:2222`  
 **Ground truth:** `scalpel/tests/ground_truth.jsonl`  
-**Generated:** 2026-04-23 11:53:01
+**Generated:** 2026-04-23 12:19:01
 
 ## Summary
 
-- **Tested:** 92 commands
-- **Clean:** 18
-- **Flagged:** 74 (80.4%)
+- **Tested:** 94 commands
+- **Clean:** 1
+- **Flagged:** 93 (98.9%)
 - **Skipped (identity-dependent):** 24 — captured as `pi` user on ref Pi but red team logs into cowrie as `root`, so these mismatches are test-setup artifacts, not real fidelity gaps.
 
 ### Findings by type
 
 | Count | Type |
 |-------|------|
-| 71 | output mismatch |
-| 3 | line count far off |
+| 87 | output mismatch |
+| 6 | line count far off |
 
 ## Flagged commands
+
+### `hostname` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+raspberrypi
+```
+
+**Got:**
+```
+raspberrypi
+```
+
+---
 
 ### `hostnamectl` — deterministic
 
@@ -26,18 +46,40 @@
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
  Static hostname: raspberrypi
        Icon name: computer
       Machine ID: deb3ea2bcab54412a5ec9c8c0c2281fb
          Boot ID: b384a3a8d40c4ca9b688908a728ddf54
 Operating System: Debian GNU/Linux 13 (trixie)
-          Kernel: Linux 6.12.75+rpt-rpi-2712
-    Architecture: arm64
-```
+          Kerne... [+54B]```
 
 **Got:**
 ```
 -bash: hostnamectl: command not found
+```
+
+---
+
+### `echo $SHELL` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/bin/bash
+```
+
+**Got:**
+```
+/bin/bash
 ```
 
 ---
@@ -48,6 +90,10 @@ Operating System: Debian GNU/Linux 13 (trixie)
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Linux raspberrypi 6.12.75+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.75-1+rpt1 (2026-03-11) aarch64 GNU/Linux
 ```
 
@@ -64,6 +110,10 @@ Linux raspberrypi 3.2.0-4-amd64 #1 SMP Debian 3.2.68-1+deb7u1 x86_64 GNU/Linux
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 aarch64
 ```
 
@@ -80,6 +130,10 @@ x86_64
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 6.12.75+rpt-rpi-2712
 ```
 
@@ -90,12 +144,36 @@ x86_64
 
 ---
 
+### `uname -s` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+Linux
+```
+
+**Got:**
+```
+Linux
+```
+
+---
+
 ### `uname -v` — deterministic
 
 - output mismatch
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 #1 SMP PREEMPT Debian 1:6.12.75-1+rpt1 (2026-03-11)
 ```
 
@@ -112,6 +190,10 @@ x86_64
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 aarch64
 ```
 
@@ -128,6 +210,10 @@ aarch64
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 processor	: 0
 BogoMIPS	: 108.00
 Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
@@ -135,12 +221,7 @@ CPU implementer	: 0x41
 CPU architecture: 8
 CPU variant	: 0x4
 CPU part	: 0xd0b
-CPU revision	: 1
-
-processor	: 1
-BogoMIPS	: 108.00
-Features	: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp
-CPU implementer	: 0x... [+637B]```
+C... [+816B]```
 
 **Got:**
 ```
@@ -172,6 +253,10 @@ flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat... [+
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Linux version 6.12.75+rpt-rpi-2712 (serge@raspberrypi.com) (aarch64-linux-gnu-gcc-14 (Debian 14.2.0-19) 14.2.0, GNU ld (GNU Binutils for Debian) 2.44) #1 SMP PREEMPT Debian 1:6.12.75-1+rpt1 (2026-03-11)
 ```
 
@@ -188,6 +273,10 @@ Linux version 3.2.0-4-amd64 (debian-kernel@lists.debian.org) (gcc version 4.6.3 
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
 NAME="Debian GNU/Linux"
 VERSION_ID="13"
@@ -196,9 +285,7 @@ VERSION_CODENAME=trixie
 DEBIAN_VERSION_FULL=13.4
 ID=debian
 HOME_URL="https://www.debian.org/"
-SUPPORT_URL="https://www.debian.org/support"
-BUG_REPORT_URL="https://bugs.debian.org/"
-```
+SUPPORT_URL="https://w... [+65B]```
 
 **Got:**
 ```
@@ -212,6 +299,10 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 13.4
 ```
 
@@ -227,6 +318,10 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Debian GNU/Linux 13 \n \l
 
 ```
@@ -244,15 +339,15 @@ Debian GNU/Linux 7 \n \l
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Architecture:                            aarch64
 CPU op-mode(s):                          32-bit, 64-bit
 Byte Order:                              Little Endian
 CPU(s):                                  4
-On-line CPU(s) list:                     0-3
-Vendor ID:                               ARM
-Model name:                              Cortex-A76
-Model:                                   1
-Thread(s) pe... [+2189B]```
+On-line CPU(s) lis... [+2368B]```
 
 **Got:**
 ```
@@ -279,6 +374,10 @@ CPU MHz:               2200.000... [+197B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Distributor ID:	Debian
 Description:	Debian GNU/Linux 13 (trixie)
 Release:	13
@@ -298,12 +397,16 @@ Codename:	trixie
 
 **Expected:**
 ```
- 11:26:28 up 19:35,  5 users,  load average: 0.00, 0.00, 0.00
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+ 12:15:41 up 20:24,  5 users,  load average: 0.00, 0.00, 0.00
 ```
 
 **Got:**
 ```
-11:52:05  up 59 min,  1 user,  load average: 0.00, 0.00, 0.00
+12:18:04  up 5 min,  1 user,  load average: 0.00, 0.00, 0.00
 ```
 
 ---
@@ -314,51 +417,63 @@ Codename:	trixie
 
 **Expected:**
 ```
-Thu 23 Apr 11:26:28 EDT 2026
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+Thu 23 Apr 12:15:41 EDT 2026
 ```
 
 **Got:**
 ```
-Thu Apr 23 15:52:06 UTC 2026
+Thu Apr 23 16:18:04 UTC 2026
 ```
 
 ---
 
-### `free -m` — deterministic
+### `free -m` — variable
 
-- output mismatch
+- line count far off (7 expected, 3 got)
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
                total        used        free      shared  buff/cache   available
-Mem:           16218         432       15429          12         488       15786
+Mem:           16218         436       15425          12         489       15782
 Swap:           2047           0        2047
 ```
 
 **Got:**
 ```
               total        used        free      shared  buff/cache   available
-Mem:          16604         396       15899          13         308       16125
+Mem:          16604        1556       13840          14        1206       14983
 Swap:          2097           0        2097
 ```
 
 ---
 
-### `free -h` — deterministic
+### `free -h` — variable
 
-- output mismatch
+- line count far off (7 expected, 3 got)
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
                total        used        free      shared  buff/cache   available
-Mem:            15Gi       432Mi        15Gi        12Mi       488Mi        15Gi
+Mem:            15Gi       436Mi        15Gi        12Mi       489Mi        15Gi
 Swap:          2.0Gi          0B       2.0Gi
 ```
 
 **Got:**
 ```
               total        used        free      shared  buff/cache   available
-Mem:            16G        395M         15G         13M        308M         16G
+Mem:            16G          1G         13G         14M          1G         14G
 Swap:            2G          0B          2G
 ```
 
@@ -370,15 +485,15 @@ Swap:            2G          0B          2G
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Filesystem      Size  Used Avail Use% Mounted on
 udev            7.9G     0  7.9G   0% /dev
 tmpfs           3.2G   13M  3.2G   1% /run
 /dev/mmcblk0p2  117G  4.1G  109G   4% /
-tmpfs           8.0G     0  8.0G   0% /dev/shm
-tmpfs           5.0M   48K  5.0M   1% /run/lock
-tmpfs           1.0M     0  1.0M   0% /run/credentials/systemd-journald.service
-tmpfs           8.0G     0  8.0G   0% /tmp
-/dev/mm... [+258B]```
+tmpfs           8.0G     0  8.0G   0% /dev/shm... [+437B]```
 
 **Got:**
 ```
@@ -396,14 +511,15 @@ tmpfs                                                    25M  192K   25M   1% /r
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Filesystem      Inodes IUsed   IFree IUse% Mounted on
 udev            516397   507  515890    1% /dev
 tmpfs           519006   924  518082    1% /run
 /dev/mmcblk0p2 7775376 73111 7702265    1% /
-tmpfs           519006     1  519005    1% /dev/shm
-tmpfs           519006     5  519001    1% /run/lock
-tmpfs             1024     1    1023    1% /run/credentials/systemd-journald.service
-tmpfs          ... [+318B]```
+tmpfs           519006    ... [+497B]```
 
 **Got:**
 ```
@@ -421,13 +537,14 @@ tmpfs                                                    25M  192K   25M   1% /r
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 sysfs on /sys type sysfs (rw,nosuid,nodev,noexec,relatime)
 proc on /proc type proc (rw,relatime)
 udev on /dev type devtmpfs (rw,nosuid,relatime,size=8262352k,nr_inodes=516397,mode=755)
-devpts on /dev/pts type devpts (rw,nosuid,noexec,relatime,gid=5,mode=600,ptmxmode=000)
-tmpfs on /run type tmpfs (rw,nosuid,nodev,noexec,relatime,size=3321648k,mode=755)
-/dev/mmcblk0p2 on / type ext4 (rw,noatime)
-sec... [+1912B]```
+devpts on /dev/pts type devpts (rw,n... [+2091B]```
 
 **Got:**
 ```
@@ -444,15 +561,17 @@ devpts on /dev/pts type devpts (rw,noexec,nosuid,gid=5,mode=620)
 
 ### `ps aux` — variable
 
-- line count far off (178 expected, 77 got)
+- line count far off (182 expected, 77 got)
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
 root           1  0.0  0.0  25472 14960 ?        Ss   Apr22   0:04 /sbin/init
-root           2  0.0  0.0      0     0 ?        S    Apr22   0:00 [kthreadd]
-root           3  0.0  0.0      0     0 ?        S    Apr22   0:00 [pool_workqueue_release]
-root           4  0.0  0.0      0     0 ?        I<   Apr22   0:00 [kworker/R... [+15567B]```
+root           2  0.0  0.0      0     0 ?        S    Apr22   0:00 [... [+15789B]```
 
 **Got:**
 ```
@@ -466,39 +585,42 @@ root         5     0.0        0.0        0         0         ?       D<    J... 
 
 ### `ps -ef` — variable
 
-- line count far off (178 expected, 3 got)
+- line count far off (182 expected, 3 got)
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 UID          PID    PPID  C STIME TTY          TIME CMD
 root           1       0  0 Apr22 ?        00:00:04 /sbin/init
 root           2       0  0 Apr22 ?        00:00:00 [kthreadd]
-root           3       2  0 Apr22 ?        00:00:00 [pool_workqueue_release]
-root           4       2  0 Apr22 ?        00:00:00 [kworker/R-kvfree_rcu_reclaim]
-root           5       2  0 Apr22 ?        00:00:00 [kwork... [+12893B]```
+root           3       2  0 Apr22 ?    ... [+13099B]```
 
 **Got:**
 ```
 PID   TTY     TIME  COMMAND                     
-7153  pts/0   0:00  -bash                        
-7155  pts/0   0:00  ps -ef                          
+4037  pts/0   0:00  -bash                        
+4039  pts/0   0:00  ps -ef                          
 ```
 
 ---
 
 ### `top -bn1` — variable
 
-- line count far off (184 expected, 1 got)
+- line count far off (188 expected, 1 got)
 
 **Expected:**
 ```
-top - 11:26:28 up 19:35,  5 users,  load average: 0.00, 0.00, 0.00
-Tasks: 177 total,   1 running, 176 sleeping,   0 stopped,   0 zombie
-%Cpu(s):  0.0 us,  0.0 sy,  0.0 ni,100.0 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
-MiB Mem :  16218.9 total,  15426.5 free,    436.2 used,    488.8 buff/cache     
-MiB Swap:   2048.0 total,   2048.0 free,      0.0 used.  15782.7 avail Mem 
 
-    PID USER      PR  NI ... [+14157B]```
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+top - 12:15:41 up 20:24,  5 users,  load average: 0.00, 0.00, 0.00
+Tasks: 177 total,   1 running, 176 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.0 us,  2.4 sy,  0.0 ni, 97.6 id,  0.0 wa,  0.0 hi,  0.0 si,  0.0 st 
+MiB ... [+14336B]```
 
 **Got:**
 ```
@@ -513,6 +635,10 @@ E82: Cannot allocate any buffer, exiting...
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 bin
 boot
 dev
@@ -550,15 +676,16 @@ var        vmlinuz
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 total 64
 drwxr-xr-x  18 root root  4096 Apr 12 20:06 .
 drwxr-xr-x  18 root root  4096 Apr 12 20:06 ..
 lrwxrwxrwx   1 root root     7 Mar  2 16:50 bin -> usr/bin
 drwxr-xr-x   3 root root  4096 Apr 12 20:13 boot
-drwxr-xr-x  16 root root  4200 Apr 23 10:37 dev
-drwxr-xr-x  95 root root  4096 Apr 23 10:36 etc
-drwxr-xr-x   3 root root  4096 Apr 12 20:06 home
-lrwxrwxrwx   1 root root     7 Mar  2 16:50 l... [+662B]```
+drwxr-xr-x ... [+841B]```
 
 **Got:**
 ```
@@ -579,6 +706,10 @@ lrwxrwxrwx 1 root root    32 2013-04-05 07:53 initr... [+947B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 pi
 ```
 
@@ -595,11 +726,13 @@ phil
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 systemd-private-b384a3a8d40c4ca9b688908a728ddf54-bluetooth.service-5iy5tq
 systemd-private-b384a3a8d40c4ca9b688908a728ddf54-polkit.service-mWUU9f
-systemd-private-b384a3a8d40c4ca9b688908a728ddf54-systemd-hostnamed.service-2G3KqR
-systemd-private-b384a3a8d40c4ca9b688908a728ddf54-systemd-logind.service-pHDZ3U
-```
+systemd-private-b384a3a8d40c4ca9b688908a728ddf54-systemd-hostnamed.service-G... [+85B]```
 
 **Got:**
 ```
@@ -613,13 +746,16 @@ systemd-private-b384a3a8d40c4ca9b688908a728ddf54-systemd-logind.service-pHDZ3U
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 total 4
-drwxrwxrwt 10 root root  200 Apr 23 11:26 .
+drwxrwxrwt 10 root root  200 Apr 23 12:15 .
 drwxr-xr-x 18 root root 4096 Apr 12 20:06 ..
 drwxrwxrwt  2 root root   40 Apr 22 15:15 .font-unix
 drwxrwxrwt  2 root root   40 Apr 22 15:15 .ICE-unix
-drwx------  3 root root   60 Apr 22 15:15 systemd-private-b384a3a8d40c4ca9b688908a728ddf54-bluetooth.service-5iy5tq
-drwx------  3 root root   60 Apr 23 11:23 systemd-private-b384a3a8d40c4ca9b688908a... [+380B]```
+drwx------  3 root ... [+559B]```
 
 **Got:**
 ```
@@ -637,6 +773,10 @@ drwxrwxrwt 1 root root 4096 2013-04-05 08:03 .X11-unix
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 alternatives.log
 apt
 bootstrap.log
@@ -670,6 +810,10 @@ messages         news             syslog           user... [+32B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 adduser.conf
 alternatives
 apparmor
@@ -687,23 +831,7 @@ ca-certificates.conf
 chatscripts
 cifs-utils
 cloud
-console-setup
-credstore
-credstore.encrypted
-cron.d
-cron.daily
-cron.hourly
-cron.monthly
-crontab
-cron.weekly
-cron.yearly
-dbus-1
-dconf
-debconf.conf
-debian_version
-debuginfod
-default
-deluser.con... [+1236B]```
+console-set... [+1415B]```
 
 **Got:**
 ```
@@ -722,16 +850,16 @@ cron.... [+3129B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 root:x:0:0:root:/root:/bin/bash
 daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 bin:x:2:2:bin:/bin:/usr/sbin/nologin
 sys:x:3:3:sys:/dev:/usr/sbin/nologin
 sync:x:4:65534:sync:/bin:/bin/sync
-games:x:5:60:games:/usr/games:/usr/sbin/nologin
-man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
-lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
-mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
-news:x:9:9:news:/var/spool... [+999B]```
+games:x:5:60:games:/usr/games:/u... [+1178B]```
 
 **Got:**
 ```
@@ -756,6 +884,10 @@ proxy:x:13:13:... [+468B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 root:x:0:
 daemon:x:1:
 bin:x:2:
@@ -776,21 +908,7 @@ voice:x:22:
 cdrom:x:24:pi
 floppy:x:25:
 tape:x:26:
-sudo:x:27:pi
-audio:x:29:pi
-dip:x:30:
-www-data:x:33:
-backup:x:34:
-operator:x:37:
-list:x:38:
-irc:x:39:
-src:x:40:
-shadow:x:42:
-utmp:x:43:
-video:x:44:pi
-sasl:x:45:
-plugdev:x:46:pi
-staff:... [+345B]```
+sud... [+524B]```
 
 **Got:**
 ```
@@ -838,15 +956,14 @@ pl... [+138B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 # Your system has configured 'manage_etc_hosts' as True.
 # As a result, if you wish for changes to this file to persist
 # then you will need to either
-# a.) make changes to the master file in /etc/cloud/templates/hosts.debian.tmpl
-# b.) change or remove the value of 'manage_etc_hosts' in
-#     /etc/cloud/cloud.cfg or cloud-config from user-data
-#
-127.0.1.1 raspberrypi raspberrypi
-127.0.0.1 localho... [+149B]```
+# a.) make changes to the master file in /etc/cloud/templates/hosts.de... [+328B]```
 
 **Got:**
 ```
@@ -867,6 +984,10 @@ ff02::2 ip6-allrouters
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 # Generated by NetworkManager
 nameserver 1.1.1.1
 nameserver 8.8.8.8
@@ -886,6 +1007,10 @@ nameserver 8.8.4.4
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 cat: /etc/shadow: Permission denied
 ```
 
@@ -912,15 +1037,15 @@ proxy:*:15800:0:999... [+350B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
   File: /etc/passwd
   Size: 1399      	Blocks: 8          IO Block: 4096   regular file
 Device: 179,2	Inode: 32353       Links: 1
 Access: (0644/-rw-r--r--)  Uid: (    0/    root)   Gid: (    0/    root)
-Access: 2026-04-12 20:13:39.206010996 -0400
-Modify: 2026-04-12 20:13:39.206010996 -0400
-Change: 2026-04-12 20:13:39.214010996 -0400
- Birth: 2026-04-12 20:13:39.206010996 -0400
-```
+Access: 2026-04-12... [+158B]```
 
 **Got:**
 ```
@@ -935,15 +1060,15 @@ Change: 2026-04-12 20:13:39.214010996 -0400
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
   File: /root
   Size: 4096      	Blocks: 8          IO Block: 4096   directory
 Device: 179,2	Inode: 25          Links: 3
 Access: (0700/drwx------)  Uid: (    0/    root)   Gid: (    0/    root)
-Access: 2026-04-12 20:13:33.405015589 -0400
-Modify: 2026-04-12 20:04:55.241557368 -0400
-Change: 2026-04-12 20:12:20.241663720 -0400
- Birth: 2026-04-12 20:12:20.089662988 -0400
-```
+Access: 2026-04-12 20:13:33... [+149B]```
 
 **Got:**
 ```
@@ -958,13 +1083,14 @@ Change: 2026-04-12 20:12:20.241663720 -0400
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
     inet 127.0.0.1/8 scope host lo
-       valid_lft forever preferred_lft forever
-    inet6 ::1/128 scope host noprefixroute 
-       valid_lft forever preferred_lft forever
-2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc fq_codel state DO... [+476B]```
+       valid_lft forever preferred_l... [+657B]```
 
 **Got:**
 ```
@@ -979,13 +1105,14 @@ Change: 2026-04-12 20:12:20.241663720 -0400
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
     inet 127.0.0.1/8 scope host lo
-       valid_lft forever preferred_lft forever
-    inet6 ::1/128 scope host noprefixroute 
-       valid_lft forever preferred_lft forever
-2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc fq_codel state DO... [+476B]```
+       valid_lft forever preferred_l... [+657B]```
 
 **Got:**
 ```
@@ -1000,6 +1127,10 @@ Change: 2026-04-12 20:12:20.241663720 -0400
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 default via 10.4.27.1 dev wlan0 proto dhcp src 10.4.27.33 metric 600 
 10.4.27.0/24 dev wlan0 proto kernel scope link src 10.4.27.33 metric 600 
 ```
@@ -1017,11 +1148,13 @@ default via 10.4.27.1 dev wlan0 proto dhcp src 10.4.27.33 metric 600
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
     link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc fq_codel state DOWN mode DEFAULT group default qlen 1000
-    link/ether 88:a2:9e:1d:74:e9 brd ff:ff:ff:ff:ff:ff
-3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_cod... [+104B]```
+2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdis... [+283B]```
 
 **Got:**
 ```
@@ -1036,8 +1169,15 @@ default via 10.4.27.1 dev wlan0 proto dhcp src 10.4.27.33 metric 600
 
 **Expected:**
 ```
-bash: line 1: arp: command not found
-```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+? (10.4.27.14) at 2e:39:08:92:f3:a8 [ether] on wlan0
+? (10.4.27.63) at 58:cd:c9:a4:08:8f [ether] on wlan0
+? (10.4.27.1) at f4:1e:57:85:0b:06 [ether] on wlan0
+? (10.4.27.56) at 8c:e9:ee:18:12:e9 [ether] on wlan0
+? (10.4.27... [+43B]```
 
 **Got:**
 ```
@@ -1052,12 +1192,36 @@ bash: line 1: arp: command not found
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Netid State  Recv-Q Send-Q Local Address:Port  Peer Address:PortProcess
 udp   UNCONN 0      0            0.0.0.0:52553      0.0.0.0:*          
 udp   UNCONN 0      0            0.0.0.0:5353       0.0.0.0:*          
-udp   UNCONN 0      0                  *:52245            *:*          
-udp   UNCONN 0      0                  *:5353             *:*          
-tcp   LISTEN 0      128        127.0.0.1... [+248B]```
+udp  ... [+427B]```
+
+**Got:**
+```
+-bash: /bin/ss: cannot execute binary file: Exec format error
+```
+
+---
+
+### `ss -tnp` — variable
+
+- line count far off (9 expected, 1 got)
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+ESTAB 0      0         10.4.27.33:22     10.4.27.56:51263       
+ESTAB 0      0         10.4.27.33:22     10.4.27.63:56500       
+ESTAB 0      0         10.... [+104B]```
 
 **Got:**
 ```
@@ -1072,11 +1236,13 @@ tcp   LISTEN 0      128        127.0.0.1... [+248B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Active Internet connections (only servers)
 Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
-tcp        0      0 127.0.0.1:6010          0.0.0.0:*               LISTEN      -                   
-tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      -                   
-tcp6       0      0 ::1:6010                :::*      ... [+552B](Not all processes could be identified, non-owned process info
+tcp        0      0 127.0.0.1:6010          0.0.0.0:*               LISTEN   ... [+731B](Not all processes could be identified, non-owned process info
  will not be shown, you would have to be root to see it all.)
 ```
 
@@ -1098,6 +1264,10 @@ unix  2      [ ACC ]     STR... [+301B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 10.4.27.33 
 ```
 
@@ -1113,6 +1283,10 @@ unix  2      [ ACC ]     STR... [+301B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 total 16
 drwxr-xr-x  2 root root 4096 Apr 12 20:05 .
 drwxr-xr-x 95 root root 4096 Apr 23 10:36 ..
@@ -1135,6 +1309,10 @@ drwxr-xr-x 1 root root 4096 2013-04-05 08:06 ..
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 -rw-r--r-- 1 root root 1042 Jun 13  2025 /etc/crontab
 ```
 
@@ -1151,15 +1329,16 @@ drwxr-xr-x 1 root root 4096 2013-04-05 08:06 ..
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 total 28
 drwxr-xr-x  2 root root 4096 Apr 12 20:07 .
 drwxr-xr-x 95 root root 4096 Apr 23 10:36 ..
 -rwxr-xr-x  1 root root 1478 Jun 24  2025 apt-compat
 -rwxr-xr-x  1 root root  123 Dec 15 19:50 dpkg
--rwxr-xr-x  1 root root  377 Apr  7  2025 logrotate
--rwxr-xr-x  1 root root 1395 May  2  2025 man-db
--rw-r--r--  1 root root  102 Jun 13  2025 .placeholder
-```
+-rwxr-xr-x  1 root root... [+133B]```
 
 **Got:**
 ```
@@ -1180,6 +1359,10 @@ drwxr-xr-x 1 root root  4096 2013-04-05 08:06 ..
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 no crontab for pi
 ```
 
@@ -1196,10 +1379,13 @@ no crontab for root
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
   UNIT                                                        LOAD   ACTIVE SUB     DESCRIPTION
   alsa-restore.service                                        loaded active exited  Save/Restore Sound Card State
-  avahi-daemon.service                                        loaded active running Avahi mDNS/DNS-SD Stack
-  bluetooth.service                                           loaded active runnin... [+4833B]```
+  avahi-dae... [+5012B]```
 
 **Got:**
 ```
@@ -1214,10 +1400,12 @@ no crontab for root
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 NEXT                            LEFT LAST                              PASSED UNIT                         ACTIVATES
-Thu 2026-04-23 14:04:27 EDT 2h 37min Wed 2026-04-22 22:22:00 EDT      13h ago apt-daily.timer              apt-daily.service
-Thu 2026-04-23 16:06:05 EDT 4h 39min Wed 2026-04-22 16:06:05 EDT      19h ago systemd-tmpfiles-clean.timer systemd-tmpfiles-clean.service
-Thu 2026-04-23 18:51... [+942B]```
+Thu 2026-04-23 14:04:27 EDT 1h 48min Wed 2026-04-22 22:22:00 EDT      13h ago apt-daily.timer           ... [+1121B]```
 
 **Got:**
 ```
@@ -1232,6 +1420,10 @@ Thu 2026-04-23 18:51... [+942B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 bluetooth.target.wants
 cloud-config.target.wants
 cloud-init.target.wants
@@ -1239,15 +1431,7 @@ dbus-fi.w1.wpa_supplicant1.service
 dbus-org.bluez.service
 dbus-org.freedesktop.Avahi.service
 dbus-org.freedesktop.nm-dispatcher.service
-dbus-org.freedesktop.timesync1.service
-default.target
-getty.target.wants
-graphical.target.wants
-multi-user.target.wants
-network-online.target.wants
-sockets.target.wants
-sshd.service
-sshd.serv... [+125B]```
+dbus-org.fre... [+304B]```
 
 **Got:**
 ```
@@ -1262,6 +1446,10 @@ multi-user.target.wants sockets.target.wants    syslog.service
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 cat: /etc/rc.local: No such file or directory
 ```
 
@@ -1278,15 +1466,38 @@ cat: /etc/rc.local: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Desired=Unknown/Install/Remove/Purge/Hold
 | Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend
 |/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)
-||/ Name                                 Version                              Architecture Description
-+++-====================================-====================================-============-==========================... [+86943B]```
+||/ Name                                 ... [+87122B]```
 
 **Got:**
 ```
 -bash: /usr/bin/dpkg: cannot execute binary file: Exec format error
+```
+
+---
+
+### `which python` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/usr/bin/python
+```
+
+**Got:**
+```
+/usr/bin/python
 ```
 
 ---
@@ -1297,11 +1508,151 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /usr/bin/python3
 ```
 
 **Got:**
 ```
+```
+
+---
+
+### `which python2` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
+
+**Got:**
+```
+```
+
+---
+
+### `which perl` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/usr/bin/perl
+```
+
+**Got:**
+```
+/usr/bin/perl
+```
+
+---
+
+### `which ruby` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
+
+**Got:**
+```
+```
+
+---
+
+### `which gcc` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/usr/bin/gcc
+```
+
+**Got:**
+```
+/usr/bin/gcc
+```
+
+---
+
+### `which make` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/usr/bin/make
+```
+
+**Got:**
+```
+/usr/bin/make
+```
+
+---
+
+### `which curl` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/usr/bin/curl
+```
+
+**Got:**
+```
+/usr/bin/curl
+```
+
+---
+
+### `which wget` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+/usr/bin/wget
+```
+
+**Got:**
+```
+/usr/bin/wget
 ```
 
 ---
@@ -1312,6 +1663,10 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /usr/bin/nc
 ```
 
@@ -1322,12 +1677,70 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 ---
 
+### `which ncat` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
+
+**Got:**
+```
+```
+
+---
+
+### `which nmap` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
+
+**Got:**
+```
+```
+
+---
+
+### `which tcpdump` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
+
+**Got:**
+```
+```
+
+---
+
 ### `which strace` — deterministic
 
 - output mismatch
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /usr/bin/strace
 ```
 
@@ -1343,6 +1756,10 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /usr/bin/bash
 ```
 
@@ -1359,16 +1776,81 @@ Desired=Unknown/Install/Remove/Purge/Hold
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 GNU bash, version 5.2.37(1)-release (aarch64-unknown-linux-gnu)
 Copyright (C) 2022 Free Software Foundation, Inc.
 License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
 
-This is free software; you are free to change and redistribute it.
-There is NO WARRANTY, to the extent permitted by law.
+This is free software; you a... [+93B]```
+
+**Got:**
+```
+```
+
+---
+
+### `nc -h` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+OpenBSD netcat (Debian patchlevel 1.229-1)
+usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]
+	  [-m minttl] [-O length] [-P proxy_username] [-p source_port]
+	  [-q seconds] [-s sourceaddr] [-T keyword] [-V rtable] [-W recvlimit]
+	  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]
+	  [destination] [port]
+	Command Summary:
+		-4		Use IPv4
+		-6		Use IPv6
+		-b		Allow broadca... [+1287B]```
+
+**Got:**
+```
+OpenBSD netcat
+usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]
+	  [-m minttl] [-O length] [-P proxy_username] [-p source_port]
+	  [-q seconds] [-s source] [-T keyword] [-V rtable] [-W recvlimit] [-w timeout]
+	  [-X proxy_protocol] [-x proxy_address[:port]]		  [destination] [port]
+	Command Summary:
+		-4		Use IPv4
+		-6		Use IPv6
+		-b		Allow broadcast
+		-C		Send CRLF as line-endin... [+1251B]```
+
+---
+
+### `nc` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]
+	  [-m minttl] [-O length] [-P proxy_username] [-p source_port]
+	  [-q seconds] [-s sourceaddr] [-T keyword] [-V rtable] [-W recvlimit]
+	  [-w timeout] [-X proxy_protocol] [-x proxy_address[:port]]
+	  [destination] [port]
 ```
 
 **Got:**
 ```
+usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]
+	  [-m minttl] [-O length] [-P proxy_username] [-p source_port]
+	  [-q seconds] [-s source] [-T keyword] [-V rtable] [-W recvlimit] [-w timeout]
+	  [-X proxy_protocol] [-x proxy_address[:port]]		  [destination] [port]
 ```
 
 ---
@@ -1379,6 +1861,10 @@ There is NO WARRANTY, to the extent permitted by law.
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 moduli
 ssh_config
 ssh_config.d
@@ -1409,15 +1895,16 @@ ssh_host_rsa_key       ssh_host_rsa_key.pub   sshd_config
 **Expected:**
 ```
 
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+
 # This is the sshd server system-wide configuration file.  See
 # sshd_config(5) for more information.
 
 # This sshd was compiled with PATH=/usr/local/bin:/usr/bin:/bin:/usr/games
 
-# The strategy used for options in the default sshd_config shipped with
-# OpenSSH is to specify options with their default value where
-# possible, but leave them commented.  Uncommented options override the
-# default val... [+3024B]```
+# The strategy used for options in the de... [+3203B]```
 
 **Got:**
 ```
@@ -1431,6 +1918,10 @@ ssh_host_rsa_key       ssh_host_rsa_key.pub   sshd_config
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 bash: line 1: nmap: command not found
 ```
 
@@ -1447,6 +1938,10 @@ bash: line 1: nmap: command not found
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 bash: line 1: ncat: command not found
 ```
 
@@ -1463,6 +1958,10 @@ bash: line 1: ncat: command not found
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 bash: line 1: nonexistentcmd12345: command not found
 ```
 
@@ -1479,6 +1978,10 @@ bash: line 1: nonexistentcmd12345: command not found
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 cat: /root/nothere: Permission denied
 ```
 
@@ -1495,6 +1998,10 @@ cat: /root/nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 ls: cannot access '/nothere': No such file or directory
 ```
 
@@ -1511,6 +2018,10 @@ ls: cannot access /nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 bash: line 1: cd: /nothere: No such file or directory
 ```
 
@@ -1527,6 +2038,10 @@ bash: cd: /nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /bin/bash: ELF 64-bit LSB pie executable, ARM aarch64, version 1 (SYSV), dynamically linked, interpreter /lib/ld-linux-aarch64.so.1, BuildID[sha1]=bea6a154d9a9158114ee0a2a439045596615df14, for GNU/Linux 3.7.0, stripped
 ```
 
@@ -1543,6 +2058,10 @@ bash: cd: /nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /usr/bin/dash
 ```
 
@@ -1559,6 +2078,10 @@ bash: cd: /nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /usr/lib/polkit-1/polkit-agent-helper-1
 /usr/lib/dbus-1.0/dbus-daemon-launch-helper
 /usr/lib/openssh/ssh-keysign
@@ -1568,14 +2091,7 @@ bash: cd: /nothere: No such file or directory
 /usr/bin/passwd
 /usr/bin/chsh
 /usr/bin/ntfs-3g
-/usr/bin/gpasswd
-/usr/bin/su
-/usr/bin/mount
-/usr/bin/newgrp
-/usr/bin/sudo
-/usr/bin/umount
-/usr/bin/fusermount3
-```
+/usr/bin/gp... [+100B]```
 
 **Got:**
 ```
@@ -1589,6 +2105,10 @@ bash: cd: /nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /var/tmp
 /tmp
 /tmp/.font-unix
@@ -1602,11 +2122,25 @@ bash: cd: /nothere: No such file or directory
 /run/user/1000/dbus-1/services
 /run/user/1000/gnupg
 /run/user/1000/systemd
-/run/user/1000/systemd/generator.late
-/run/user/1000/systemd/generator.late/xdg-desktop-autostart.target.wants
-/run/user/1000/systemd/units
-/run/user/1000/systemd/propagate
-/run/user/1000/syst... [+2553B]```
+/run/user/100... [+2736B]```
+
+**Got:**
+```
+```
+
+---
+
+### `getcap -r / 2>/dev/null` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
 
 **Got:**
 ```
@@ -1620,11 +2154,12 @@ bash: cd: /nothere: No such file or directory
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 /etc/profile.d/sshpwd.sh:	echo $"SSH is enabled and the default password for the 'pi' user has not been changed."
-/etc/profile.d/sshpwd.sh:	echo $"This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password."
-/etc/ssh/sshd_config:#PermitRootLogin prohibit-password
-/etc/ssh/sshd_config:# To disable tunneled clear text passwords, change to "no" here!
-/etc/ssh/sshd... [+4683B]```
+/etc/profile.d/sshpwd.sh:	echo $"This is a security risk - please login as the 'pi' user and type 'passwd' ... [+4862B]```
 
 **Got:**
 ```
@@ -1642,14 +2177,15 @@ usage: grep [-abcDEFGHhIiJLlmnOoPqRSsUVvwxZ] [-A num] [-B num] [-C[num]]
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 Listing...
 7zip/stable,now 25.01+dfsg-1~deb13u1 arm64 [installed,automatic]
 adduser/stable,stable,now 3.152 all [installed]
 alsa-topology-conf/stable,stable,now 1.2.5.1-3 all [installed,automatic]
-alsa-ucm-conf/stable,stable,now 1.2.14-1 all [installed,automatic]
-alsa-utils/stable,now 1.2.14-1+rpt1 arm64 [installed,automatic]
-apparmor/stable,now 4.1.0-1 arm64 [installed,automatic]
-apt-listchanges/... [+39044B]```
+alsa-ucm-conf/stable,sta... [+39223B]```
 
 **Got:**
 ```
@@ -1663,12 +2199,34 @@ apt-listchanges/... [+39044B]```
 
 **Expected:**
 ```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
 44K	/home/pi
 ```
 
 **Got:**
 ```
 28K     .
+```
+
+---
+
+### `find / -name '*.sql' 2>/dev/null` — deterministic
+
+- output mismatch
+
+**Expected:**
+```
+
+SSH is enabled and the default password for the 'pi' user has not been changed.
+This is a security risk - please login as the 'pi' user and type 'passwd' to set a new password.
+
+```
+
+**Got:**
+```
 ```
 
 ---
