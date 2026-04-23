@@ -19,6 +19,34 @@ import time
 RUNS = int(os.environ.get("RUNS", "5"))
 TIMEOUT = float(os.environ.get("TIMEOUT", "10"))
 
+
+def login_path() -> str:
+    """Extract PATH from a login shell without capturing profile.d banners.
+
+    `bash -lc` sources /etc/profile + /etc/profile.d/* + ~/.profile so PATH
+    matches interactive-SSH reality (includes /usr/sbin → arp, ip, stat…).
+    But profile.d scripts like sshpwd.sh print to stdout, which would
+    contaminate every probe if we ran `bash -lc` for every command.
+
+    Solution: run bash -lc once, sentinel-wrap the PATH echo, grep the
+    sentinel, and reuse that PATH for plain `bash -c` probe runs.
+    """
+    proc = subprocess.run(
+        ["bash", "-lc", "printf '\\n__PATH__=%s\\n' \"$PATH\""],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    for line in proc.stdout.splitlines():
+        if line.startswith("__PATH__="):
+            return line[len("__PATH__="):]
+    # Fallback: Debian root login PATH. Shouldn't happen on a healthy Pi.
+    return "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+
+PROBE_ENV = os.environ.copy()
+PROBE_ENV["PATH"] = login_path()
+
 # Regular probes: run RUNS times each so we can distinguish deterministic
 # output (Tier 1 lookup material) from variable output (Tier 2 LLM).
 PROBES = [
@@ -101,14 +129,13 @@ SLOW_PROBES = [
 def run_probe(cmd: str, run: int) -> None:
     t0 = time.perf_counter_ns()
     try:
-        # -l: login shell, so /etc/profile + ~/.profile set PATH the way an
-        # interactive SSH session sees it (includes /usr/sbin → arp, etc.).
         proc = subprocess.run(
-            ["bash", "-lc", cmd],
+            ["bash", "-c", cmd],
             capture_output=True,
             timeout=TIMEOUT,
             text=True,
             errors="replace",
+            env=PROBE_ENV,
         )
         stdout, stderr, rc = proc.stdout, proc.stderr, proc.returncode
     except subprocess.TimeoutExpired as e:
