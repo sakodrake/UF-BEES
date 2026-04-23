@@ -313,6 +313,179 @@ router.handle_command(command: str, session_id: str) -> str
 
 ---
 
+## Repo Structure
+
+We use ONE git repo (forked from upstream Cowrie). All team-owned code lives in a top-level `scalpel/` directory to keep it cleanly separated from Cowrie's source.
+
+```
+UF-BEES/                            ← root of git repo (forked Cowrie)
+├── src/                            ← Cowrie source — DO NOT EDIT
+├── etc/
+│   ├── cowrie.cfg                  ← Cowrie config (Cowrie/FS Lead edits)
+│   └── userdb.txt                  ← honeypot user creds (DO NOT change)
+├── share/cowrie/
+│   └── fs.pickle                   ← virtual filesystem (edit via fsctl)
+├── bin/
+│   ├── cowrie                      ← start/stop daemon
+│   └── fsctl                       ← inspect/modify fs.pickle
+│
+├── scalpel/                        ← ALL OUR CODE LIVES HERE
+│   ├── README.md                   ← what's in this folder
+│   ├── CONTEXT.md                  ← THIS FILE — paste into Claude
+│   │
+│   ├── cowrie_hook.py              ← entry point Cowrie calls
+│   │                                  → calls router.handle_command()
+│   │
+│   ├── router/                     ← Router/Integration Lead
+│   │   ├── __init__.py
+│   │   ├── handle_command.py       ← decision logic, three-tier routing
+│   │   ├── lookup_table.py         ← Tier 1 dict of canned responses
+│   │   └── session_state.py        ← per-session: cwd, env, "created" files
+│   │
+│   ├── local_llm/                  ← Ollama Lead
+│   │   ├── __init__.py
+│   │   ├── client.py               ← exposes generate(command, state)
+│   │   ├── prompt.py               ← system prompt template
+│   │   └── benchmark.py            ← model comparison script (Day 1 only)
+│   │
+│   ├── aws/                        ← AWS Lead
+│   │   ├── __init__.py
+│   │   ├── client.py               ← exposes escalate(command, history)
+│   │   ├── lambda_function.py      ← deployed to AWS Lambda
+│   │   └── deploy.sh               ← deploys lambda + API gateway
+│   │
+│   ├── tests/                      ← Test/Presentation Lead
+│   │   ├── attacker_sim.py         ← runs attack patterns vs honeypot
+│   │   ├── diff_pis.py             ← diffs honeypot vs reference Pi
+│   │   └── ground_truth.txt        ← captured outputs from reference Pi
+│   │
+│   ├── scripts/                    ← Cowrie/FS Lead
+│   │   ├── harden_fs.py            ← scripted fs.pickle edits
+│   │   ├── banner.py               ← SSH banner customization
+│   │   └── capture_truth.sh        ← runs probes vs reference Pi
+│   │
+│   ├── notes/
+│   │   └── decisions.md            ← architectural decision log
+│   │
+│   └── slides.pptx                 ← presentation
+│
+└── (everything else Cowrie ships with)
+```
+
+**Rules:**
+- Nobody edits `src/` (Cowrie source)
+- Each owner edits only their listed files (avoids merge conflicts)
+- The Pi runs from this exact directory layout — `git pull` updates the running system
+
+---
+
+## Runtime File Flow — How They Feed Into Each Other
+
+When an attacker types a command, here's the literal sequence of function calls across files:
+
+### Step 1: Cowrie receives the command
+Cowrie is running its own daemon (in `src/`) and intercepts the command via our hook configured in `etc/cowrie.cfg`.
+
+### Step 2: `scalpel/cowrie_hook.py` is called
+```python
+def on_command(command: str, session_id: str) -> str:
+    from scalpel.router.handle_command import handle_command
+    return handle_command(command, session_id)
+```
+That's the only thing this file does — bridge Cowrie to our router.
+
+### Step 3: `scalpel/router/handle_command.py` decides which tier
+```python
+def handle_command(command, session_id):
+    state = session_state.get(session_id)        # → session_state.py
+    
+    # Try Tier 1 first (fastest)
+    canned = lookup_table.get(command)            # → lookup_table.py
+    if canned is not None:
+        session_state.update(session_id, command, canned)
+        return canned
+    
+    # Decide between Tier 2 (local) and Tier 3 (cloud)
+    if should_escalate(command):
+        try:
+            response = aws_client.escalate(command, state.history)  # → aws/client.py
+        except (Timeout, Exception):
+            response = local_llm.generate(command, state)            # fallback → local_llm/client.py
+    else:
+        response = local_llm.generate(command, state)                # → local_llm/client.py
+    
+    session_state.update(session_id, command, response)              # → session_state.py
+    return response
+```
+
+### Step 4a: Tier 1 path — `scalpel/router/lookup_table.py`
+Pure dict lookup:
+```python
+LOOKUP = {
+    "whoami": "root\n",
+    "uname -m": "aarch64\n",
+    # ... ~20 entries captured from reference Pi
+}
+def get(command):
+    return LOOKUP.get(command)
+```
+Returns instantly. No state, no I/O.
+
+### Step 4b: Tier 2 path — `scalpel/local_llm/client.py`
+```python
+def generate(command, session_state):
+    from scalpel.local_llm.prompt import build_prompt
+    prompt = build_prompt(command, session_state)         # → prompt.py
+    # POST to localhost:11434/api/generate with keep_alive=-1
+    # returns ~300-800ms later
+    return response.text
+```
+
+### Step 4c: Tier 3 path — `scalpel/aws/client.py`
+```python
+def escalate(command, session_history):
+    payload = {"command": command, "history": session_history}
+    # POST to API Gateway HTTPS endpoint
+    # → triggers scalpel/aws/lambda_function.py in AWS
+    # → which calls Bedrock
+    # returns ~1-3 seconds later
+    return response.json()["output"]
+```
+
+### Step 5: `scalpel/router/session_state.py` updates state
+```python
+def update(session_id, command, response):
+    state = SESSIONS[session_id]
+    state.history.append((command, response))
+    state.parse_side_effects(command)
+    # parse_side_effects handles: cd (updates cwd), export (updates env),
+    # touch/rm/echo > file (updates "created files" set)
+```
+
+### Step 6: Response returns up the call stack
+`handle_command()` returns to `cowrie_hook.py`, which returns to Cowrie, which displays it to the attacker.
+
+---
+
+## Why This Structure Helps LLM Context
+
+When a teammate asks Claude/Cursor "how do I add X to the system," Claude can now figure out:
+
+- **Where** the change goes (which file, which folder)
+- **Who owns it** (so the teammate knows to coordinate)
+- **What it depends on** (which other files it imports from)
+- **What contracts it must respect** (the function signatures above)
+- **Where to add a test** (`scalpel/tests/`)
+
+For example: "Add a new recon command to Tier 1" →
+- Edit `scalpel/router/lookup_table.py` (Router/Integration Lead's file)
+- Run command on reference Pi to capture exact output → `scalpel/tests/ground_truth.txt`
+- Run `scalpel/tests/diff_pis.py` to verify
+
+That's the kind of grounded answer Claude can only give if it knows the structure.
+
+---
+
 ## Integration Checkpoints (Day 1)
 
 Every 2 hours the team stops and tests the full pipeline together. No checkpoint = no integration = catastrophic merge at hour 8.
