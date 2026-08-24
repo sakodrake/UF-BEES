@@ -1,5 +1,7 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2010 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2015-2024 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ class Command_last(HoneyPotCommand):
 
         self.write(
             "{:8s} {:12s} {:16s} {}   still logged in\n".format(
-                self.protocol.user.username,
+                self.user["username"],
                 "pts/0",
                 self.protocol.clientIP,
                 time.strftime(

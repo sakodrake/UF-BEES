@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2018 Jc2k <john.carr@unrouted.co.uk>
+# SPDX-FileCopyrightText: 2018-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """
 Output plugin for HPFeeds
 """
@@ -5,11 +10,10 @@ Output plugin for HPFeeds
 from __future__ import annotations
 
 import json
-import logging
 
 from hpfeeds.twisted import ClientSessionService
 from twisted.internet import endpoints, reactor, ssl
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -19,6 +23,8 @@ class Output(cowrie.core.output.Output):
     """
     Output plugin for HPFeeds
     """
+
+    _log = Logger()
 
     channel = "cowrie.sessions"
 
@@ -110,7 +116,7 @@ class Output(cowrie.core.output.Output):
         elif event["eventid"] == "cowrie.session.closed":
             meta = self.meta.pop(session, None)
             if meta:
-                log.msg("publishing metadata to hpfeeds", logLevel=logging.DEBUG)
+                self._log.debug("publishing metadata to hpfeeds")
                 meta["endTime"] = event["timestamp"]
                 meta["hashes"] = list(meta["hashes"])
                 self.client.publish(self.channel, json.dumps(meta).encode("utf-8"))

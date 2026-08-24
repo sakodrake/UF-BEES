@@ -1,5 +1,7 @@
-# Copyright (c) 2016 Dave Germiquet
-# See LICENSE for details.
+# SPDX-FileCopyrightText: 2016 Dave Germiquet
+# SPDX-FileCopyrightText: 2016-2024 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -19,6 +21,10 @@ class FakeServer:
 
         self.fs = fs.HoneyPotFilesystem("arch", "/root")
         self.process = None
+
+    def initFileSystem(self, home: str) -> None:
+        """The filesystem is already created in __init__; sessions call this
+        before use."""
 
 
 class FakeAvatar:

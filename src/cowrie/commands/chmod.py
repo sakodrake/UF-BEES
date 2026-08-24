@@ -1,5 +1,8 @@
-# Copyright (c) 2020 Peter Sufliarsky <sufliarskyp@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2020 Peter Šufliarsky
+# SPDX-FileCopyrightText: 2020 Peter Sufliarsky <sufliarskyp@gmail.com>
+# SPDX-FileCopyrightText: 2021-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -82,11 +85,11 @@ class Command_chmod(HoneyPotCommand):
         for file in files:
             if file == "*":
                 # if the current directory is empty, return 'No such file or directory'
-                files = self.fs.get_path(self.protocol.cwd)[:]
+                files = self.fs.get_path(self.cwd)[:]
                 if not files:
                     self.errorWrite("chmod: cannot access '*': No such file or directory\n")
             else:
-                path = self.fs.resolve_path(file, self.protocol.cwd)
+                path = self.fs.resolve_path(file, self.cwd)
                 if not self.fs.exists(path):
                     self.errorWrite(
                         f"chmod: cannot access '{file}': No such file or directory\n"

@@ -1,4 +1,6 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 Splunk HTTP Event Collector (HEC) Connector.
@@ -13,7 +15,7 @@ from io import BytesIO
 from typing import Any
 
 from twisted.internet import reactor, ssl
-from twisted.python import log
+from twisted.logger import Logger
 from twisted.web import client, http_headers
 from twisted.web.client import FileBodyProducer
 from twisted.web.iweb import IPolicyForHTTPS
@@ -27,6 +29,8 @@ class Output(cowrie.core.output.Output):
     """
     Splunk HEC output
     """
+
+    _log = Logger()
 
     token: str
     agent: Any
@@ -95,7 +99,11 @@ class Output(cowrie.core.output.Output):
             if response.code == 200:
                 return
             else:
-                log.msg(f"SplunkHEC response: {response.code} {response.phrase}")
+                self._log.info(
+                    "SplunkHEC response: {code} {phrase}",
+                    code=response.code,
+                    phrase=response.phrase,
+                )
                 d = client.readBody(response)
                 d.addCallback(cbBody)
                 d.addErrback(cbPartial)
@@ -106,7 +114,7 @@ class Output(cowrie.core.output.Output):
 
         def processResult(result):
             j = json.loads(result)
-            log.msg(f"SplunkHEC response: {j['text']}")
+            self._log.info("SplunkHEC response: {text}", text=j["text"])
 
         d.addCallback(cbResponse)
         d.addErrback(cbError)

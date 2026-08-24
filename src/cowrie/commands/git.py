@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2025 Erik Belak
+# SPDX-FileCopyrightText: 2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """
 dig command
 """
@@ -17,7 +22,7 @@ class Command_git(HoneyPotCommand):
             self.display_usage()
             return
 
-        path = self.protocol.cwd
+        path = self.cwd
         subcommand = self.args[0]
 
         if subcommand == "--version":
@@ -37,8 +42,8 @@ class Command_git(HoneyPotCommand):
                 else:
                     self.fs.mkdir(
                         pname,
-                        self.protocol.user.uid,
-                        self.protocol.user.gid,
+                        self.user["uid"],
+                        self.user["gid"],
                         4096,
                         16877,
                     )
@@ -46,8 +51,8 @@ class Command_git(HoneyPotCommand):
                     initialize_git = self.fs.resolve_path(".git", path + "/" + repo)
                     self.fs.mkdir(
                         initialize_git,
-                        self.protocol.user.uid,
-                        self.protocol.user.gid,
+                        self.user["uid"],
+                        self.user["gid"],
                         4096,
                         16877,
                     )
@@ -72,7 +77,7 @@ class Command_git(HoneyPotCommand):
                 )
             else:
                 self.fs.mkdir(
-                    pname, self.protocol.user.uid, self.protocol.user.gid, 4096, 16877
+                    pname, self.user["uid"], self.user["gid"], 4096, 16877
                 )
                 self.write(f"Initialized empty Git repository in {path}/.git/\n")
 

@@ -1,4 +1,7 @@
-# Copyright (c) 2013 Bas Stottelaar <basstottelaar [AT] gmail [DOT] com>
+# SPDX-FileCopyrightText: 2013 Bas Stottelaar <basstottelaar [AT] gmail [DOT] com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -12,7 +15,7 @@ from cowrie.shell.command import HoneyPotCommand
 commands = {}
 
 
-class OptionParsingError(RuntimeError):
+class OptionParsingError(Exception):
     def __init__(self, msg: str) -> None:
         self.msg = msg
 
@@ -51,8 +54,7 @@ class Command_iptables(HoneyPotCommand):
     current_table: dict[str, list[Any]]
 
     def user_is_root(self) -> bool:
-        out: bool = self.protocol.user.username == "root"
-        return out
+        return bool(self.user["uid"] == 0)
 
     def start(self) -> None:
         """

@@ -1,33 +1,41 @@
-# Copyright (c) 2022 Michel Oosterhof <michel@oosterhof.net>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2014-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 import getopt
-import os
+import posixpath
 from http.client import responses
 from urllib import parse
 
 import treq
-from twisted.internet import error
+from twisted.internet import error, reactor
 from twisted.internet.defer import inlineCallbacks
-from twisted.python import log
+from twisted.logger import Logger
+from twisted.python import failure
 
 from cowrie.core.artifact import Artifact
 from cowrie.core.config import CowrieConfig
-from cowrie.core.network import communication_allowed
-from cowrie.core.rate_limiter import RateLimiter
+from cowrie.core.download import (
+    BlockedAddress,
+    UnreachableAddress,
+    capture_download,
+    fetch,
+    outbound_rate_limiter,
+    report_download_failure,
+)
+from cowrie.core.network import (
+    DownloadLimitExceeded,
+    abort_body,
+    communication_allowed,
+)
 from cowrie.shell.command import HoneyPotCommand
 
 commands = {}
 
-# Initialize rate limiter
-curl_rate_limiter = RateLimiter(
-    enabled=CowrieConfig.getboolean("honeypot", "curl_rate_limit_enabled", fallback=True),
-    max_requests=CowrieConfig.getint("honeypot", "curl_rate_limit_requests", fallback=5),
-    window_seconds=CowrieConfig.getint("honeypot", "curl_rate_limit_window", fallback=60),
-    max_keys=CowrieConfig.getint("honeypot", "curl_rate_limit_max_hosts", fallback=1000)
-)
+curl_rate_limiter = outbound_rate_limiter("curl")
 
 CURL_HELP = """Usage: curl [options...] <url>
 Options: (H) means HTTP/HTTPS only, (F) means FTP only
@@ -191,6 +199,8 @@ class Command_curl(HoneyPotCommand):
     curl command
     """
 
+    _log = Logger()
+
     limit_size: int = CowrieConfig.getint("honeypot", "download_limit_size", fallback=0)
     outfile: str | None = None  # outfile is the file saved inside the honeypot
     artifact: (
@@ -216,7 +226,7 @@ class Command_curl(HoneyPotCommand):
             self.errorWrite(
                 "curl: try 'curl --help' or 'curl --manual' for more information\n"
             )
-            self.exit()
+            self.exit(2)
             return
 
         for opt in optlist:
@@ -229,86 +239,103 @@ class Command_curl(HoneyPotCommand):
             elif opt[0] == "-I" or opt[0] == "--head":
                 self.head_request = True
 
-        if len(args):
-            if args[0] is not None:
-                url = str(args[0]).strip()
-        else:
+        url = ""
+        if len(args) and args[0] is not None:
+            url = str(args[0]).strip()
+        if not url:
             self.errorWrite(
                 "curl: try 'curl --help' or 'curl --manual' for more information\n"
             )
-            self.exit()
+            self.exit(2)
             return
 
         if "://" not in url:
             url = "http://" + url
-        urldata = parse.urlparse(url)
+
+        # urlparse() raises on malformed IPv6 brackets, and .port and .hostname
+        # are parsed lazily and raise rather than returning None for a port
+        # that is not a decimal 0-65535. The URL is attacker input.
+        try:
+            urldata = parse.urlparse(url)
+            hostname = urldata.hostname
+            port = urldata.port
+        except ValueError:
+            self.errorWrite("curl: (3) URL using bad/illegal format or missing URL\n")
+            self.exit(3)
+            return
 
         for opt in optlist:
             if opt[0] == "-o":
-                self.outfile = opt[1]
+                # `-o -` writes the body to stdout, same as no -o at all.
+                self.outfile = opt[1] if opt[1] != "-" else None
             if opt[0] == "-O":
                 self.outfile = urldata.path.split("/")[-1]
-                if (
-                    self.outfile is None
-                    or not len(self.outfile.strip())
-                    or not urldata.path.count("/")
-                ):
+                if not len(self.outfile.strip()) or not urldata.path.count("/"):
                     self.errorWrite("curl: Remote file name has no length!\n")
-                    self.exit()
+                    self.exit(23)
                     return
 
         if self.outfile:
-            self.outfile = self.fs.resolve_path(self.outfile, self.protocol.cwd)
-            if self.outfile:
-                path = os.path.dirname(self.outfile)
+            self.outfile = self.fs.resolve_path(self.outfile, self.cwd)
+            path = posixpath.dirname(self.outfile) if self.outfile else ""
             if not path or not self.fs.exists(path) or not self.fs.isdir(path):
                 self.errorWrite(
                     f"curl: {self.outfile}: Cannot open: No such file or directory\n"
                 )
-                self.exit()
+                self.exit(23)
                 return
 
-        self.url = url.encode("ascii")
+        # The URL is attacker input and can contain non-ASCII characters;
+        # encoding it as ASCII raised UnicodeEncodeError.
+        self.url = url.encode("utf8")
 
-        parsed = parse.urlparse(url)
-        if parsed.scheme:
-            scheme = parsed.scheme
+        scheme = urldata.scheme
         if scheme != "http" and scheme != "https":
             self.errorWrite(
                 f'curl: (1) Protocol "{scheme}" not supported or disabled in libcurl\n'
             )
-            self.exit()
+            self.exit(1)
             return
-        if parsed.hostname:
-            self.host = parsed.hostname
+        if hostname:
+            self.host = hostname
         else:
-            self.errorWrite(
-                f'curl: (1) Protocol "{scheme}" not supported or disabled in libcurl\n'
-            )
-            self.exit()
-        self.port = parsed.port or (443 if scheme == "https" else 80)
+            self.errorWrite("curl: (3) URL using bad/illegal format or missing URL\n")
+            self.exit(3)
+            return
+        self.port = port or (443 if scheme == "https" else 80)
 
         # Check rate limit before proceeding
         if not curl_rate_limiter.check(self.host):
-            log.msg(f"curl: rate limit exceeded for host: {self.host}. Simulating connection timeout")
+            self._log.info(
+                "curl: rate limit exceeded for host: {host}. Simulating connection timeout",
+                host=self.host,
+            )
 
             # Simulate connection timeout
             self.errorWrite(
                 f"curl: (7) Failed to connect to {self.host} port {self.port}: Operation timed out\n"
             )
-            self.exit()
+            self.exit(7)
             return
 
         allowed = yield communication_allowed(self.host)
         if not allowed:
-            log.msg("Attempt to access blocked network address")
+            self._log.info("Attempt to access blocked network address")
             self.errorWrite(f"curl: (6) Could not resolve host: {self.host}\n")
-            self.exit()
+            self.exit(6)
             return None
 
         self.artifact = Artifact("curl-download")
 
-        self.deferred = self.treqDownload(url)
+        # treq.get() can raise synchronously before returning a Deferred (e.g.
+        # idna.core.InvalidCodepoint for an IPv4-embedded IPv6 URL literal such
+        # as [::ffff:8.8.8.8]). Route that raise through error() so the command
+        # exits instead of being orphaned on the cmdstack until session timeout.
+        try:
+            self.deferred = self.treqDownload(url)
+        except Exception:
+            self.error(failure.Failure())
+            return
         if self.deferred:
             self.deferred.addCallback(self.success)
             self.deferred.addErrback(self.error)
@@ -319,23 +346,31 @@ class Command_curl(HoneyPotCommand):
         """
         headers = {"User-Agent": ["curl/7.38.0"]}
 
-        # TODO: use designated outbound interface
-        # out_addr = None
-        # if CowrieConfig.has_option("honeypot", "out_addr"):
-        #     out_addr = (CowrieConfig.get("honeypot", "out_addr"), 0)
-        if self.head_request:
-            deferred = treq.head(
-                url=url, allow_redirects=False, headers=headers, timeout=10
-            )
-        else:
-            deferred = treq.get(
-                url=url, allow_redirects=False, headers=headers, timeout=10
-            )
-        return deferred
+        # curl reports a redirect rather than following it unless -L is given,
+        # which cowrie does not implement, so stop at the first response.
+        return fetch(
+            reactor,
+            url,
+            method="head" if self.head_request else "get",
+            headers=headers,
+            timeout=10,
+            max_redirects=0,
+        )
 
     def handle_CTRL_C(self) -> None:
         self.write("^C\n")
         self.exit()
+
+    def exit(self, code: int | None = None) -> None:
+        # Close the download artifact on every exit path so an aborted download
+        # (CTRL-C, a HEAD request, a size limit, ...) does not leave its empty
+        # temp file behind in the download directory. close() is idempotent and
+        # removes an empty artifact, so the normal success/error paths are
+        # unaffected.
+        artifact = getattr(self, "artifact", None)
+        if artifact is not None:
+            artifact.close()
+        HoneyPotCommand.exit(self, code)
 
     def success(self, response):
         """
@@ -347,21 +382,33 @@ class Command_curl(HoneyPotCommand):
         if self.head_request:
             reason = responses.get(response.code, "")
             self.write(f"HTTP/1.1 {response.code} {reason}\n")
+            # Header bytes come from an attacker-directed server and need
+            # not be valid UTF-8.
             for key, values in response.headers.getAllRawHeaders():
-                decoded_key = key.decode() if isinstance(key, bytes) else key
+                decoded_key = (
+                    key.decode(errors="replace") if isinstance(key, bytes) else key
+                )
                 for value in values:
                     decoded_value = (
-                        value.decode() if isinstance(value, bytes) else value
+                        value.decode(errors="replace")
+                        if isinstance(value, bytes)
+                        else value
                     )
                     self.write(f"{decoded_key}: {decoded_value}\n")
             self.exit()
             return
 
         if self.limit_size > 0 and self.totallength > self.limit_size:
-            log.msg(
-                f"Not saving URL ({self.url.decode()}) (size: {self.totallength}) exceeds file size limit ({self.limit_size})"
+            self._log.info(
+                "Not saving URL ({url}) (size: {size}) exceeds file size limit ({limit})",
+                url=self.url.decode(),
+                size=self.totallength,
+                limit=self.limit_size,
             )
             self.exit()
+            # Stop the transfer; an undelivered body would otherwise keep
+            # downloading and buffering in memory.
+            abort_body(response)
             return
 
         if self.outfile and not self.silent:
@@ -380,13 +427,24 @@ class Command_curl(HoneyPotCommand):
         """
         partial collect
         """
+        if self.exited:
+            # The command exited while the transfer was still in flight (size
+            # limit, CTRL-C); drop late chunks instead of writing to the
+            # closed artifact.
+            return
         self.currentlength += len(data)
         if self.limit_size > 0 and self.currentlength > self.limit_size:
-            log.msg(
-                f"Not saving URL ({self.url.decode()}) (size: {self.currentlength}) exceeds file size limit ({self.limit_size})"
+            self._log.info(
+                "Not saving URL ({url}) (size: {size}) exceeds file size limit ({limit})",
+                url=self.url.decode(),
+                size=self.currentlength,
+                limit=self.limit_size,
             )
             self.exit()
-            return
+            # treq closes the connection when the collector raises, aborting
+            # the transfer instead of draining the rest of the body. The
+            # errback this triggers is inert because the command has exited.
+            raise DownloadLimitExceeded
 
         self.artifact.write(data)
 
@@ -402,37 +460,22 @@ class Command_curl(HoneyPotCommand):
         """
         this gets called once collection is complete
         """
+        if self.exited:
+            # The command exited while the transfer was still in flight; the
+            # partial artifact was already handled by exit(), so don't report
+            # a download for a dead command or exit again.
+            return
         self.artifact.close()
 
         if self.outfile and not self.silent:
             self.write("\n")
 
-        # Update the honeyfs to point to artifact file if output is to file
-        if self.outfile and self.protocol.user:
-            self.fs.mkfile(
-                self.outfile,
-                self.protocol.user.uid,
-                self.protocol.user.gid,
-                self.currentlength,
-                33188,
-            )
-            self.fs.update_realfile(
-                self.fs.getfile(self.outfile), self.artifact.shasumFilename
-            )
-
-        self.protocol.logDispatch(
-            eventid="cowrie.session.file_download",
-            format="Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s",
-            url=self.url.decode(),
-            outfile=self.artifact.shasumFilename,
-            shasum=self.artifact.shasum,
-        )
-        log.msg(
-            eventid="cowrie.session.file_download",
-            format="Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s",
-            url=self.url.decode(),
-            outfile=self.artifact.shasumFilename,
-            shasum=self.artifact.shasum,
+        capture_download(
+            self,
+            self.artifact,
+            self.url.decode(),
+            outfile=self.outfile,
+            size=self.currentlength,
         )
         self.exit()
 
@@ -440,17 +483,26 @@ class Command_curl(HoneyPotCommand):
         """
         handle any exceptions
         """
+        if self.exited:
+            # The command exited while the transfer was still in flight; a
+            # late failure of that transfer is not this command's outcome.
+            return
+        self.exit_code = 1
+        report_download_failure(self, self.url.decode())
 
-        self.protocol.logDispatch(
-            eventid="cowrie.session.file_download.failed",
-            format="Attempt to download file(s) from URL (%(url)s) failed",
-            url=self.url.decode(),
-        )
-        log.msg(
-            eventid="cowrie.session.file_download.failed",
-            format="Attempt to download file(s) from URL (%(url)s) failed",
-            url=self.url.decode(),
-        )
+        if response.check(BlockedAddress) is not None:
+            self.errorWrite(
+                f"curl: (6) Could not resolve host: {response.value.host}\n"
+            )
+            self.exit()
+            return
+
+        if response.check(UnreachableAddress) is not None:
+            self.errorWrite(
+                f"curl: (7) Failed to connect to {self.host} port {self.port}: Network is unreachable\n"
+            )
+            self.exit()
+            return
 
         if response.check(error.DNSLookupError) is not None:
             self.errorWrite(f"curl: (6) Could not resolve host: {self.host}\n")
@@ -471,14 +523,18 @@ class Command_curl(HoneyPotCommand):
             self.exit()
             return
 
+        elif response.check(error.TCPTimedOutError) is not None:
+            self.errorWrite(
+                f"curl: (7) Failed to connect to {self.host} port {self.port}: Connection timed out\n"
+            )
+            self.exit()
+            return
+
         # possible errors:
         # defer.CancelledError,
         # error.ConnectingCancelledError,
 
-        log.msg(response.printTraceback())
-        if hasattr(response, "getErrorMessage"):  # Exceptions
-            errormsg = response.getErrorMessage()
-        log.msg(errormsg)
+        self._log.failure("Unhandled curl error", failure=response)
         self.write("\n")
 
         self.exit()

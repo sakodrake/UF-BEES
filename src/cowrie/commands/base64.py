@@ -1,10 +1,15 @@
+# SPDX-FileCopyrightText: 2018 fe7ch
+# SPDX-FileCopyrightText: 2018-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import base64
 import getopt
 import sys
 
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -15,6 +20,8 @@ class Command_base64(HoneyPotCommand):
     """
     author: Ivan Korolev (@fe7ch)
     """
+
+    _log = Logger()
 
     mode: str
     ignore: bool
@@ -101,12 +108,12 @@ Try 'base64 --help' for more information.
                 self.exit()
                 return
 
-            pname = self.fs.resolve_path(args[0], self.protocol.cwd)
+            pname = self.fs.resolve_path(args[0], self.cwd)
             if not self.fs.isdir(pname):
                 try:
                     self.dojob(self.fs.file_contents(pname))
-                except Exception as e:
-                    log.err(str(e))
+                except Exception:
+                    self._log.failure("base64: failed to read file")
                     self.errorWrite(f"base64: {args[0]}: No such file or directory\n")
             else:
                 self.errorWrite("base64: read error: Is a directory\n")
@@ -134,16 +141,16 @@ Try 'base64 --help' for more information.
                 self.errorWrite("base64: invalid input\n")
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.session.input",
+        self.protocol.events.dispatch(
+            "cowrie.session.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="base64",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
-        self.dojob(line.encode("ascii"))
+        self.dojob(line.encode("utf-8"))
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 

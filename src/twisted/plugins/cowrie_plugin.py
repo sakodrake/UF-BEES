@@ -1,63 +1,40 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 import os
 import sys
-from importlib import import_module
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from twisted._version import __version__ as __twisted_version__
 from twisted.application import service
 from twisted.application.service import IServiceMaker
 from twisted.cred import portal
 from twisted.internet import reactor
-from twisted.logger import ILogObserver, globalLogPublisher
+from twisted.logger import ILogObserver, Logger, globalLogPublisher
 from twisted.plugin import IPlugin
-from twisted.python import log, usage
+from twisted.python import usage
 from zope.interface import implementer, provider
 
-import cowrie.core.checkers
-import cowrie.core.uuid
 import cowrie.llm.realm
 import cowrie.shell.realm
 import cowrie.ssh.factory
 import cowrie.telnet.factory
 from backend_pool.pool_server import PoolServerFactory
 from cowrie import __version__ as __cowrie_version__
-from cowrie import core
+from cowrie.core import checkers, uuid
 from cowrie.core.config import CowrieConfig
+from cowrie.core.events import ConsoleRenderer, EventDispatcher
+from cowrie.core.output import Output, load_plugins
 from cowrie.core.utils import create_endpoint_services, get_endpoints_from_section
 from cowrie.pool_interface.handler import PoolHandler
 
-if TYPE_CHECKING:
-    from collections.abc import Callable
+# Explicit namespace: this module lives under twisted.plugins, but its
+# lines are Cowrie startup diagnostics and must answer to the operator's
+# log_level_cowrie configuration like every other cowrie.* namespace.
+_log = Logger(namespace="cowrie.plugin")
 
 
 class Options(usage.Options):
@@ -72,11 +49,16 @@ class Options(usage.Options):
 
 @provider(ILogObserver)
 def importFailureObserver(event: dict) -> None:
-    if "failure" in event and event["failure"].type is ImportError:
-        log.err(
-            "ERROR: {}. Please run `pip install -U -r requirements.txt` "
+    # Legacy log.err events carry "failure"; twisted.logger failures
+    # carry "log_failure". Critical so the hint still reaches stderr
+    # before logging starts.
+    error = event.get("failure", event.get("log_failure"))
+    if error is not None and error.type is ImportError:
+        _log.critical(
+            "ERROR: {error}. Please run `pip install -U -r requirements.txt` "
             "from Cowrie's install directory and virtualenv to install "
-            "the new dependency".format(event["failure"].value.message)
+            "the new dependency",
+            error=str(error.value),
         )
 
 
@@ -88,7 +70,7 @@ class CowrieServiceMaker:
     tapname: ClassVar[str] = "cowrie"
     description: ClassVar[str] = "She sells sea shells by the sea shore."
     options = Options
-    output_plugins: list[Callable]
+    output_plugins: list[Output]
     topService: service.Service
 
     def __init__(self) -> None:
@@ -109,7 +91,7 @@ class CowrieServiceMaker:
             "backend_pool", "pool_only", fallback=False
         )
 
-        self.uuid = core.uuid.get_uuid()
+        self.uuid = uuid.get_uuid()
         CowrieConfig.set("honeypot", "uuid", str(self.uuid))
 
     def makeService(self, options: dict) -> service.Service:
@@ -137,12 +119,17 @@ Makes a Cowrie SSH/Telnet honeypot.
         if tz != "system":
             os.environ["TZ"] = tz
 
-        log.msg(f"Python Version {str(sys.version).replace(chr(10), '')}")
-        log.msg(
-            f"Twisted Version {__twisted_version__.major}.{__twisted_version__.minor}.{__twisted_version__.micro}"
+        _log.info(
+            "Python Version {version}", version=str(sys.version).replace(chr(10), "")
         )
-        log.msg(f"Cowrie Version {__cowrie_version__.__version__}")
-        log.msg(f"Sensor UUID: {self.uuid}")
+        _log.info(
+            "Twisted Version {major}.{minor}.{micro}",
+            major=__twisted_version__.major,
+            minor=__twisted_version__.minor,
+            micro=__twisted_version__.micro,
+        )
+        _log.info("Cowrie Version {version}", version=__cowrie_version__.__version__)
+        _log.info("Sensor UUID: {uuid}", uuid=self.uuid)
 
         # check configurations
         if not self.enableTelnet and not self.enableSSH and not self.pool_only:
@@ -151,29 +138,20 @@ Makes a Cowrie SSH/Telnet honeypot.
             )
             sys.exit(1)
 
+        # The event pipeline: session EventLogs deliver through this
+        # dispatcher to the output plugins and the console renderer
+        # (see docs/EVENT_PIPELINE.rst). It exists before the plugins so
+        # events they dispatch from start() are delivered; the plugin
+        # sinks join the fan-out once loading is complete.
+        renderer = ConsoleRenderer()
+        self.dispatcher = EventDispatcher([renderer])
+        self.dispatcher.registerShutdown(reactor)
+        Output.dispatcher = self.dispatcher
+
         # Load output modules
-        self.output_plugins = []
-        for x in CowrieConfig.sections():
-            if not x.startswith("output_"):
-                continue
-            if CowrieConfig.getboolean(x, "enabled", fallback=False) is False:
-                continue
-            engine: str = x.split("_")[1]
-            try:
-                output = import_module(f"cowrie.output.{engine}").Output()
-                log.addObserver(output.emit)
-                self.output_plugins.append(output)
-                log.msg(f"Loaded output engine: {engine}")
-            except ImportError as e:
-                log.err(
-                    f"Failed to load output engine: {engine} due to ImportError: {e}"
-                )
-                log.msg(
-                    f"Please install the dependencies for {engine} listed in requirements-output.txt"
-                )
-            except Exception:
-                log.err()
-                log.msg(f"Failed to load output engine: {engine}")
+        self.output_plugins = load_plugins(reactor)
+
+        self.dispatcher.sinks = [*self.output_plugins, renderer]
 
         self.topService = service.MultiService()
         application = service.Application("cowrie")
@@ -234,11 +212,11 @@ Makes a Cowrie SSH/Telnet honeypot.
             else:
                 raise ValueError(backend)
 
-            factory.portal.registerChecker(core.checkers.HoneypotPublicKeyChecker())
-            factory.portal.registerChecker(core.checkers.HoneypotPasswordChecker())
+            factory.portal.registerChecker(checkers.HoneypotPublicKeyChecker())
+            factory.portal.registerChecker(checkers.HoneypotPasswordChecker())
 
             if CowrieConfig.getboolean("ssh", "auth_none_enabled", fallback=False):
-                factory.portal.registerChecker(core.checkers.HoneypotNoneChecker())
+                factory.portal.registerChecker(checkers.HoneypotNoneChecker())
 
             if CowrieConfig.has_section("ssh"):
                 listen_endpoints = get_endpoints_from_section(CowrieConfig, "ssh", 2222)
@@ -261,7 +239,7 @@ Makes a Cowrie SSH/Telnet honeypot.
             else:
                 raise ValueError(backend)
 
-            f.portal.registerChecker(core.checkers.HoneypotPasswordChecker())
+            f.portal.registerChecker(checkers.HoneypotPasswordChecker())
 
             listen_endpoints = get_endpoints_from_section(CowrieConfig, "telnet", 2223)
             create_endpoint_services(reactor, self.topService, listen_endpoints, f)

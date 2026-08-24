@@ -1,5 +1,7 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2010 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ class Command_aptget(HoneyPotCommand):
         d: defer.Deferred = defer.Deferred()
         if time2:
             time = random.randint(int(time * 100), int(time2 * 100.0)) / 100.0
-        reactor.callLater(time, d.callback, None)  # type: ignore[attr-defined]
+        reactor.callLater(time, d.callback, None)
         return d
 
     def do_version(self) -> None:
@@ -178,8 +180,8 @@ pages for more information and options.
             self.write(f"Setting up {p} ({self.packages[p]['version']}) ...\n")
             self.fs.mkfile(
                 f"/usr/bin/{p}",
-                self.protocol.user.uid,
-                self.protocol.user.gid,
+                self.user["uid"],
+                self.user["gid"],
                 random.randint(10000, 90000),
                 33188,
             )

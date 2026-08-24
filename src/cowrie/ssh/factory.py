@@ -1,5 +1,7 @@
-# Copyright (c) 2009-2014 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2016-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 This module contains ...
@@ -13,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from twisted.conch.openssh_compat import primes
 from twisted.conch.ssh import factory, keys, transport
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
 from cowrie.ssh import connection
@@ -33,6 +35,7 @@ class CowrieSSHFactory(factory.SSHFactory):
     They listen directly to the TCP port
     """
 
+    _log = Logger()
     starttime: float | None = None
     privateKeys: dict[bytes, bytes]
     publicKeys: dict[bytes, bytes]
@@ -56,14 +59,6 @@ class CowrieSSHFactory(factory.SSHFactory):
             b"ssh-connection": connection.CowrieSSHConnection,
         }
         super().__init__()
-
-    def logDispatch(self, **args):
-        """
-        Special delivery to the loggers to avoid scope problems
-        """
-        args["sessionno"] = "S{}".format(args["sessionno"])
-        for output in self.tac.output_plugins:
-            output.logDispatch(**args)
 
     def startFactory(self) -> None:
         # For use by the uptime command
@@ -106,7 +101,7 @@ class CowrieSSHFactory(factory.SSHFactory):
         ).encode("ascii")
 
         factory.SSHFactory.startFactory(self)
-        log.msg("Ready to accept SSH connections")
+        self._log.info("Ready to accept SSH connections")
 
     def stopFactory(self) -> None:
         factory.SSHFactory.stopFactory(self)
@@ -134,10 +129,10 @@ class CowrieSSHFactory(factory.SSHFactory):
             ske = t.supportedKeyExchanges[:]
             if b"diffie-hellman-group-exchange-sha1" in ske:
                 ske.remove(b"diffie-hellman-group-exchange-sha1")
-                log.msg("No moduli, no diffie-hellman-group-exchange-sha1")
+                self._log.info("No moduli, no diffie-hellman-group-exchange-sha1")
             if b"diffie-hellman-group-exchange-sha256" in ske:
                 ske.remove(b"diffie-hellman-group-exchange-sha256")
-                log.msg("No moduli, no diffie-hellman-group-exchange-sha256")
+                self._log.info("No moduli, no diffie-hellman-group-exchange-sha256")
             t.supportedKeyExchanges = ske
 
         try:

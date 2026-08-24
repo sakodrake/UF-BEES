@@ -1,6 +1,6 @@
-# Copyright (c) 2010 Michel Oosterhof <michel@oosterhof.net>
-# See the COPYRIGHT file for more information
-# Contributor: Fosocles
+# SPDX-FileCopyrightText: 2020-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 awk command
@@ -13,8 +13,6 @@ from __future__ import annotations
 import getopt
 import re
 from re import Match
-
-from twisted.python import log
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.fs import FileNotFound
@@ -68,7 +66,7 @@ class Command_awk(HoneyPotCommand):
                     self.output(self.input_data)
                     continue
 
-                pname = self.fs.resolve_path(arg, self.protocol.cwd)
+                pname = self.fs.resolve_path(arg, self.cwd)
 
                 if self.fs.isdir(pname):
                     self.errorWrite(f"awk: {arg}: Is a directory\n")
@@ -109,7 +107,8 @@ class Command_awk(HoneyPotCommand):
         This is the awk output.
         """
         if inb:
-            inp = inb.decode("utf-8")
+            # Piped input is attacker bytes and need not be valid UTF-8.
+            inp = inb.decode("utf-8", errors="replace")
         else:
             return
 
@@ -147,16 +146,16 @@ class Command_awk(HoneyPotCommand):
         """
         This function logs standard input from the user send to awk
         """
-        log.msg(
-            eventid="cowrie.session.input",
+        self.protocol.events.dispatch(
+            "cowrie.session.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="awk",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
         self.output(line.encode())
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         """
         ctrl-d is end-of-file, time to terminate
         """

@@ -1,41 +1,16 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2015-2024 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 import getopt
 import hashlib
 import os
+import posixpath
 import re
-import time
 
-from twisted.python import log
-
+from cowrie.core.artifact import temp_download_path
 from cowrie.core.config import CowrieConfig
 from cowrie.shell import fs
 from cowrie.shell.command import HoneyPotCommand
@@ -51,6 +26,12 @@ class Command_scp(HoneyPotCommand):
     download_path = CowrieConfig.get("honeypot", "download_path", fallback=".")
     download_path_uniq = CowrieConfig.get(
         "honeypot", "download_path_uniq", fallback=download_path
+    )
+    # Every uploaded file costs a real temp-file write, a sha256 hash and a
+    # rename on the host filesystem, so cap how many files one upload session
+    # can save regardless of how small each file is.
+    max_files_per_session: int = CowrieConfig.getint(
+        "shell", "scp_max_files_per_session", fallback=20
     )
 
     out_dir: str = ""
@@ -78,7 +59,7 @@ class Command_scp(HoneyPotCommand):
                 break
 
         if self.out_dir:
-            outdir = self.fs.resolve_path(self.out_dir, self.protocol.cwd)
+            outdir = self.fs.resolve_path(self.out_dir, self.cwd)
 
             if not self.fs.exists(outdir):
                 self.errorWrite(f"-scp: {self.out_dir}: No such file or directory\n")
@@ -96,34 +77,26 @@ class Command_scp(HoneyPotCommand):
         self.write("\x00")
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.session.file_download",
+        self.protocol.events.dispatch(
+            "cowrie.session.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="scp",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
-        self.protocol.terminal.write("\x00")
+        self.write("\x00")
 
-    def drop_tmp_file(self, data: bytes, name: str) -> None:
-        tmp_fname = "{}-{}-{}-scp_{}".format(
-            time.strftime("%Y%m%d-%H%M%S"),
-            self.protocol.getProtoTransport().transportId,
-            self.protocol.terminal.transport.session.id,
-            re.sub("[^A-Za-z0-9]", "_", name),
-        )
-
-        self.safeoutfile = os.path.join(self.download_path, tmp_fname)
+    def drop_tmp_file(self, data: bytes) -> None:
+        self.safeoutfile = temp_download_path("scp")
 
         with open(self.safeoutfile, "wb+") as f:
             f.write(data)
 
     def save_file(self, data: bytes, fname: str) -> None:
-        self.drop_tmp_file(data, fname)
+        self.drop_tmp_file(data)
 
         if os.path.exists(self.safeoutfile):
-            with open(self.safeoutfile, "rb"):
-                shasum = hashlib.sha256(data).hexdigest()
-                hash_path = os.path.join(self.download_path_uniq, shasum)
+            shasum = hashlib.sha256(data).hexdigest()
+            hash_path = os.path.join(self.download_path_uniq, shasum)
 
             # If we have content already, delete temp file
             if not os.path.exists(hash_path):
@@ -133,10 +106,10 @@ class Command_scp(HoneyPotCommand):
                 os.remove(self.safeoutfile)
                 duplicate = True
 
-            log.msg(
-                format='SCP Uploaded file "%(filename)s" to %(outfile)s',
-                eventid="cowrie.session.file_upload",
-                filename=os.path.basename(fname),
+            self.protocol.events.dispatch(
+                "cowrie.session.file_upload",
+                'SCP Uploaded file "%(filename)s" to %(outfile)s',
+                filename=posixpath.basename(fname),
                 duplicate=duplicate,
                 url=fname,
                 outfile=shasum,
@@ -144,9 +117,13 @@ class Command_scp(HoneyPotCommand):
                 destfile=fname,
             )
 
-            # Update the honeyfs to point to downloaded file
-            self.fs.update_realfile(self.fs.getfile(fname), hash_path)
-            self.fs.chown(fname, self.protocol.user.uid, self.protocol.user.gid)
+            # Update the honeyfs to point to downloaded file. The entry is
+            # absent when mkfile could not create it (e.g. the filesystem is at
+            # its new-file quota), in which case there is nothing to point at.
+            f = self.fs.getfile(fname)
+            if f:
+                self.fs.update_realfile(f, hash_path)
+                self.fs.chown(fname, self.user["uid"], self.user["gid"])
 
     def parse_scp_data(self, data: bytes) -> bytes:
         # scp data format:
@@ -164,34 +141,70 @@ class Command_scp(HoneyPotCommand):
                 r = re.search(rb"C(0[\d]{3}) ([\d]+) ([^\s]+)", header)
 
                 if r and r.group(1) and r.group(2) and r.group(3):
-                    dend = pos + int(r.group(2))
+                    # Both fields are attacker-controlled: the filesize can
+                    # exceed int()'s digit limit (~4300, the CVE-2020-10735
+                    # mitigation) and the permissions regex admits non-octal
+                    # digits. Treat either conversion failing as a malformed
+                    # header rather than raising out of eofReceived().
+                    try:
+                        filesize = int(r.group(2))
+                        fileperm = int(r.group(1), 8)
+                    except ValueError:
+                        return b""
+
+                    dend = pos + filesize
 
                     if dend > len(data):
                         dend = len(data)
 
                     d = data[pos:dend]
 
-                    if self.out_dir:
-                        fname = os.path.join(self.out_dir, r.group(3).decode())
-                    else:
-                        fname = r.group(3).decode()
+                    # The filename is attacker-controlled and need not be
+                    # valid UTF-8; still capture the upload under a
+                    # best-effort name.
+                    scpname = r.group(3).decode(errors="replace")
 
-                    outfile = self.fs.resolve_path(fname, self.protocol.cwd)
+                    if self.out_dir:
+                        fname = posixpath.join(self.out_dir, scpname)
+                    else:
+                        fname = scpname
+
+                    outfile = self.fs.resolve_path(fname, self.cwd)
 
                     try:
                         self.fs.mkfile(
                             outfile,
-                            self.protocol.user.uid,
-                            self.protocol.user.gid,
-                            r.group(2),
-                            r.group(1),
+                            self.user["uid"],
+                            self.user["gid"],
+                            filesize,
+                            fileperm,
                         )
                     except fs.FileNotFound:
                         # The outfile locates at a non-existing directory.
                         self.errorWrite(f"-scp: {outfile}: No such file or directory\n")
                         return b""
+                    except fs.PermissionDenied:
+                        # The outfile locates in a protected path (e.g. /proc).
+                        self.errorWrite(f"-scp: {outfile}: Permission denied\n")
+                        return b""
 
-                    self.save_file(d, outfile)
+                    try:
+                        self.save_file(d, outfile)
+                    except OSError as e:
+                        # A real filesystem failure (disk full, missing or
+                        # unwritable download_path) while writing the temp
+                        # file or renaming it into place. Log it and stop the
+                        # upload cleanly instead of raising out of
+                        # eofReceived() and leaving the temp file behind.
+                        self._log.error(
+                            "scp: error saving upload {fname}: {error!r}",
+                            fname=fname,
+                            error=e,
+                        )
+                        safeoutfile = getattr(self, "safeoutfile", None)
+                        if safeoutfile and os.path.exists(safeoutfile):
+                            os.remove(safeoutfile)
+                        return b""
 
                     data = data[dend + 1 :]  # cut saved data + \x00
             else:
@@ -201,23 +214,34 @@ class Command_scp(HoneyPotCommand):
 
         return data
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
+        terminal = self.protocol.terminal
         if (
-            self.protocol.terminal.stdinlogOpen
-            and self.protocol.terminal.stdinlogFile
-            and os.path.exists(self.protocol.terminal.stdinlogFile)
+            terminal.stdinlogOpen
+            and terminal.stdinlogFile
+            and os.path.exists(terminal.stdinlogFile)
         ):
-            with open(self.protocol.terminal.stdinlogFile, "rb") as f:
+            with open(terminal.stdinlogFile, "rb") as f:
                 data: bytes = f.read()
-                header: bytes = data[: data.find(b"\n")]
-                if re.match(rb"C0[\d]{3} [\d]+ [^\s]+", header):
-                    content = data[data.find(b"\n") + 1 :]
-                else:
-                    content = b""
 
-            if content:
-                with open(self.protocol.terminal.stdinlogFile, "wb") as f:
-                    f.write(content)
+            # Decode the SCP wire protocol into the uploaded file(s), each saved
+            # as content only. The raw stdin log still holds the framing (header,
+            # body and trailing ACK), so remove it to avoid saving it again as a
+            # download.
+            filecount = 0
+            while data:
+                if filecount >= self.max_files_per_session:
+                    self._log.info(
+                        "scp: session reached scp_max_files_per_session "
+                        "({max_files}), ignoring the remaining files",
+                        max_files=self.max_files_per_session,
+                    )
+                    break
+                data = self.parse_scp_data(data)
+                filecount += 1
+
+            terminal.stdinlogOpen = False
+            os.remove(terminal.stdinlogFile)
 
         self.exit()
 

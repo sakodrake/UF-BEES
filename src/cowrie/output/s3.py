@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2017 Jc2k <john.carr@unrouted.co.uk>
+# SPDX-FileCopyrightText: 2018-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """
 Send downloaded/uplaoded files to S3 (or compatible)
 """
@@ -10,7 +15,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 from botocore.session import get_session
 from twisted.internet import defer, threads
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -20,6 +25,8 @@ class Output(cowrie.core.output.Output):
     """
     s3 output
     """
+
+    _log = Logger()
 
     def start(self) -> None:
         self.bucket = CowrieConfig.get("output_s3", "bucket")
@@ -35,7 +42,7 @@ class Output(cowrie.core.output.Output):
                     CowrieConfig.get("output_s3", "secret_access_key"),
                 )
         except NoOptionError:
-            log.msg(
+            self._log.info(
                 "No AWS credentials found in config - using botocore global settings."
             )
 
@@ -74,16 +81,25 @@ class Output(cowrie.core.output.Output):
     @defer.inlineCallbacks
     def upload(self, shasum, filename):
         if shasum in self.seen:
-            log.msg(f"Already uploaded file with sha {shasum} to S3")
+            self._log.info(
+                "Already uploaded file with sha {shasum} to S3", shasum=shasum
+            )
             return
 
         exists = yield self._object_exists_remote(shasum)
         if exists:
-            log.msg(f"Somebody else already uploaded file with sha {shasum} to S3")
+            self._log.info(
+                "Somebody else already uploaded file with sha {shasum} to S3",
+                shasum=shasum,
+            )
             self.seen.add(shasum)
             return
 
-        log.msg(f"Uploading file with sha {shasum} ({filename}) to S3")
+        self._log.info(
+            "Uploading file with sha {shasum} ({filename}) to S3",
+            shasum=shasum,
+            filename=filename,
+        )
         with open(filename, "rb") as fp:
             yield threads.deferToThread(
                 self.client.put_object,

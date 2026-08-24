@@ -1,13 +1,10 @@
 # ABOUTME: JA4 and JA4H fingerprinting for TLS and HTTP traffic
 # ABOUTME: Parses TLS Client Hello and HTTP requests to generate fingerprints
 
-# Copyright (c) 2023, FoxIO, LLC.
-# All rights reserved.
-# Patent Pending
-# JA4 is Open-Source, Licensed under BSD 3-Clause
-# JA4+ (JA4S, JA4H, JA4L, JA4X, JA4SSH) are licenced under the FoxIO License 1.1.
+# SPDX-FileCopyrightText: 2023 FoxIO, LLC.
+# SPDX-FileCopyrightText: 2025-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Adapted for Cowrie honeypot by Michel Oosterhof
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 JA4+ Fingerprinting Module
@@ -26,9 +23,11 @@ from __future__ import annotations
 
 import struct
 
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.vendor.ja4.common import GREASE_TABLE, TLS_MAPPER, sha_encode
+
+_log = Logger()
 
 # Convert FoxIO's string-based GREASE table to integer set for our use
 GREASE_VALUES = {int(k, 16) for k in GREASE_TABLE}
@@ -152,7 +151,7 @@ def parse_tls_client_hello(data: bytes) -> dict | None:
             offset += ext_length
 
     except Exception as e:
-        log.msg(f"Error parsing TLS Client Hello: {e}")
+        _log.info("Error parsing TLS Client Hello: {error}", error=e)
         return None
     else:
         return {
@@ -226,7 +225,7 @@ def parse_http_request(data: bytes) -> dict | None:
                 accept_language = header_value
 
     except Exception as e:
-        log.msg(f"Error parsing HTTP request: {e}")
+        _log.info("Error parsing HTTP request: {error}", error=e)
         return None
     else:
         return {

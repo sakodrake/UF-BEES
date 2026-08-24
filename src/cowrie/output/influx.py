@@ -1,10 +1,15 @@
+# SPDX-FileCopyrightText: 2018 oliveriandrea <oliveriandrea@gmail.com>
+# SPDX-FileCopyrightText: 2018-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import re
 
 from influxdb import InfluxDBClient
 from influxdb.exceptions import InfluxDBClientError
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -15,6 +20,8 @@ class Output(cowrie.core.output.Output):
     influx output
     """
 
+    _log = Logger()
+
     def start(self):
         host = CowrieConfig.get("output_influx", "host", fallback="")
         port = CowrieConfig.getint("output_influx", "port", fallback=8086)
@@ -24,11 +31,13 @@ class Output(cowrie.core.output.Output):
         try:
             self.client = InfluxDBClient(host=host, port=port, ssl=ssl, verify_ssl=ssl)
         except InfluxDBClientError as e:
-            log.msg(f"output_influx: I/O error({e.code}): '{e.message}'")
+            self._log.info(
+                "output_influx: I/O error({code}): '{msg}'", code=e.code, msg=e.message
+            )
             return
 
         if self.client is None:
-            log.msg("output_influx: cannot instantiate client!")
+            self._log.info("output_influx: cannot instantiate client!")
             return
 
         if CowrieConfig.has_option(
@@ -53,9 +62,10 @@ class Output(cowrie.core.output.Output):
 
             match = re.search(r"^\d+[dhmw]{1}$", retention_policy_duration)
             if not match:
-                log.msg(
+                self._log.warn(
                     "output_influx: invalid retention policy."
-                    f"Using default '{retention_policy_duration}'.."
+                    "Using default '{duration}'..",
+                    duration=retention_policy_duration,
                 )
                 retention_policy_duration = retention_policy_duration_default
         else:
@@ -102,7 +112,7 @@ class Output(cowrie.core.output.Output):
 
     def write(self, event):
         if self.client is None:
-            log.msg("output_influx: client object is not instantiated")
+            self._log.info("output_influx: client object is not instantiated")
             return
 
         # event id
@@ -162,7 +172,7 @@ class Output(cowrie.core.output.Output):
             )
 
         elif eventid == "cowrie.session.closed":
-            m["fields"].update({"duration": event["duration"]})
+            m["fields"].update({"duration_ms": event["duration_ms"]})
 
         elif eventid == "cowrie.client.version":
             m["fields"].update(
@@ -206,12 +216,16 @@ class Output(cowrie.core.output.Output):
             # are not implemented
         else:
             # other events should be handled
-            log.msg(f"output_influx: event '{eventid}' not handled. Skipping..")
+            self._log.info(
+                "output_influx: event '{eventid}' not handled. Skipping..",
+                eventid=eventid,
+            )
             return
 
         result = self.client.write_points([m])
 
         if not result:
-            log.msg(
-                f"output_influx: error when writing '{eventid}' measurement in the db."
+            self._log.info(
+                "output_influx: error when writing '{eventid}' measurement in the db.",
+                eventid=eventid,
             )

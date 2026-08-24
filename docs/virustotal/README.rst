@@ -1,3 +1,7 @@
+.. SPDX-FileCopyrightText: 2025 Michel Oosterhof <michel@oosterhof.net>
+..
+.. SPDX-License-Identifier: BSD-3-Clause
+
 VirusTotal Integration
 ======================
 
@@ -341,7 +345,7 @@ To contribute improvements to the VirusTotal integration:
 2. Create a feature branch
 3. Make your changes to ``src/cowrie/output/virustotal.py``
 4. Add tests to ``src/cowrie/test/test_virustotal.py``
-5. Run the test suite: ``python -m pytest src/cowrie/test/test_virustotal.py -v``
+5. Run the test suite: ``PYTHONPATH=src python -m unittest cowrie.test.test_virustotal``
 6. Run type checking: ``mypy src/cowrie/output/virustotal.py``
 7. Run linting: ``ruff check src/cowrie/output/virustotal.py``
 8. Submit a pull request
@@ -354,7 +358,7 @@ The VirusTotal integration is part of Cowrie and is licensed under the same BSD 
 Support
 -------
 
-* **Documentation**: https://cowrie.readthedocs.io/
+* **Documentation**: https://docs.cowrie.org/
 * **Issues**: https://github.com/cowrie/cowrie/issues
 * **Discussions**: https://github.com/cowrie/cowrie/discussions
 * **VirusTotal Support**: https://support.virustotal.com/

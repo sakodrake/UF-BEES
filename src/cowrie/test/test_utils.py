@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2016-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import configparser
@@ -10,6 +14,7 @@ from twisted.internet import protocol, reactor
 from cowrie.core.utils import (
     create_endpoint_services,
     durationHuman,
+    escape_nonprintable,
     get_endpoints_from_section,
 )
 
@@ -31,8 +36,14 @@ class UtilsTestCase(unittest.TestCase):
         hour = durationHuman(3600)
         self.assertEqual(hour, "01:00:00")
 
-        something = durationHuman(364020)
-        self.assertEqual(something, "4.0 days 05:07:00")
+        days = durationHuman(364020)
+        self.assertEqual(days, "4 days 05:07:00")
+
+        one_day = durationHuman(86400)
+        self.assertEqual(one_day, "1 day 00:00")
+
+        years = durationHuman(2 * 365 * 86400)
+        self.assertEqual(years, "1 year ")
 
     def test_get_endpoints_from_section(self) -> None:
         cfg = get_config("[ssh]\nlisten_addr = 1.1.1.1\n")
@@ -84,13 +95,20 @@ class UtilsTestCase(unittest.TestCase):
             get_endpoints_from_section(cfg, "ssh", 2222),
         )
 
-    def test_create_endpoint_services(self) -> None:
-        parent = MultiService()
-        create_endpoint_services(
-            reactor, parent, ["tcp:23:interface=1.1.1.1"], protocol.Factory()
+    def test_escape_nonprintable(self) -> None:
+        # Printable ASCII passes through unchanged.
+        self.assertEqual(
+            escape_nonprintable(b"SSH-2.0-OpenSSH_9.6"), "SSH-2.0-OpenSSH_9.6"
         )
-        self.assertEqual(len(parent.services), 1)
+        # Control characters are escaped, not emitted raw (log injection guard).
+        self.assertEqual(escape_nonprintable(b"a\r\n\x1b[2Jb"), "a\\x0d\\x0a\\x1b[2Jb")
+        # Invalid-UTF8 / high bytes are escaped.
+        self.assertEqual(escape_nonprintable(b"/*\xe0Cookie"), "/*\\xe0Cookie")
+        # The backslash itself is escaped so the output is unambiguous.
+        self.assertEqual(escape_nonprintable(b"a\\xff"), "a\\\\xff")
+        self.assertEqual(escape_nonprintable(b""), "")
 
+    def test_create_endpoint_services(self) -> None:
         parent = MultiService()
         create_endpoint_services(
             reactor, parent, ["tcp:23:interface=1.1.1.1"], protocol.Factory()

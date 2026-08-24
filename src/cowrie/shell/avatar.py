@@ -1,5 +1,7 @@
-# Copyright (c) 2009-2014 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 from __future__ import annotations
@@ -9,7 +11,8 @@ from twisted.conch.error import ConchError
 from twisted.conch.interfaces import IConchUser, ISession, ISFTPServer
 from twisted.conch.ssh import filetransfer as conchfiletransfer
 from twisted.conch.ssh.connection import OPEN_UNKNOWN_CHANNEL_TYPE
-from twisted.python import components, log
+from twisted.logger import Logger
+from twisted.python import components
 from zope.interface import implementer
 
 from cowrie.core.config import CowrieConfig
@@ -21,9 +24,13 @@ from cowrie.ssh import session as sshsession
 
 @implementer(IConchUser)
 class CowrieUser(avatar.ConchUser):
+    _log = Logger()
+
     def __init__(self, username: bytes, server: server.CowrieServer) -> None:
         avatar.ConchUser.__init__(self)
-        self.username: str = username.decode("utf-8")
+        # The username is attacker input from SSH userauth and need not be
+        # valid UTF-8.
+        self.username: str = username.decode("utf-8", errors="replace")
         self.server = server
 
         self.channelLookup[b"session"] = sshsession.HoneyPotSSHSession
@@ -51,7 +58,7 @@ class CowrieUser(avatar.ConchUser):
             )
 
     def logout(self) -> None:
-        log.msg(f"avatar {self.username} logging out")
+        self._log.info("avatar {username} logging out", username=self.username)
 
     def lookupChannel(self, channelType, windowSize, maxPacket, data):
         """

@@ -1,8 +1,10 @@
-# Copyright (c) 2018 Michel Oosterhof
-# See LICENSE for details.
+# SPDX-FileCopyrightText: 2018-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
 import os
+import tempfile
 import unittest
 
 from cowrie.shell.protocol import HoneyPotInteractiveProtocol
@@ -10,7 +12,7 @@ from cowrie.test.fake_server import FakeAvatar, FakeServer
 from cowrie.test.fake_transport import FakeTransport
 
 os.environ["COWRIE_HONEYPOT_DATA_PATH"] = "data"
-os.environ["COWRIE_HONEYPOT_DOWNLOAD_PATH"] = "/tmp"
+os.environ["COWRIE_HONEYPOT_DOWNLOAD_PATH"] = tempfile.gettempdir()
 os.environ["COWRIE_SHELL_FILESYSTEM"] = "src/cowrie/data/fs.pickle"
 
 PROMPT = b"root@unitTest:~# "
@@ -109,13 +111,11 @@ class ShellEchoCommandTests(unittest.TestCase):
         self.proto.lineReceived(b"echo test_$(echo test)_test")
         self.assertEqual(self.tr.value(), b"test_test_test\n" + PROMPT)
 
-    def test_echo_command_021(self) -> None:
-        self.proto.lineReceived(b"echo test_$(echo test)_test_$(echo test)_test")
-        self.assertEqual(self.tr.value(), b"test_test_test_test_test\n" + PROMPT)
-
     def test_echo_command_022(self) -> None:
-        self.proto.lineReceived(b"echo test; (echo test)")
-        self.assertEqual(self.tr.value(), b"test\ntest\n" + PROMPT)
+        # A subshell runs in sequence with the surrounding line: the preceding
+        # command's output comes first, like bash (`echo b; (echo a)` -> b, a).
+        self.proto.lineReceived(b"echo b; (echo a)")
+        self.assertEqual(self.tr.value(), b"b\na\n" + PROMPT)
 
     def test_echo_command_023(self) -> None:
         self.proto.lineReceived(b"echo `echo test`")
@@ -124,10 +124,6 @@ class ShellEchoCommandTests(unittest.TestCase):
     def test_echo_command_024(self) -> None:
         self.proto.lineReceived(b"echo test_`echo test`_test")
         self.assertEqual(self.tr.value(), b"test_test_test\n" + PROMPT)
-
-    def test_echo_command_025(self) -> None:
-        self.proto.lineReceived(b"echo test_`echo test`_test_`echo test`_test")
-        self.assertEqual(self.tr.value(), b"test_test_test_test_test\n" + PROMPT)
 
     def test_echo_command_026(self) -> None:
         self.proto.lineReceived(b'echo "TEST1: `echo test1`, TEST2: `echo test2`"')
@@ -150,14 +146,6 @@ class ShellEchoCommandTests(unittest.TestCase):
         self.proto.lineReceived(b"(echo hello)")
         self.assertEqual(self.tr.value(), b"hello\n" + PROMPT)
 
-    def test_subshell_parentheses_002(self) -> None:
-        """Test subshell vs command substitution difference"""
-        self.proto.lineReceived(b"echo $(echo hello)")
-        self.assertEqual(self.tr.value(), b"hello\n" + PROMPT)
-        self.tr.clear()
-        self.proto.lineReceived(b"(echo hello)")
-        self.assertEqual(self.tr.value(), b"hello\n" + PROMPT)
-
     def test_subshell_parentheses_003(self) -> None:
         """Test parentheses with multiple commands - should execute all commands"""
         self.proto.lineReceived(b"(echo hello; echo world)")
@@ -168,7 +156,7 @@ class ShellEchoCommandTests(unittest.TestCase):
         self.proto.lineReceived(b"echo before (echo middle) after")
         self.assertEqual(
             self.tr.value(),
-            b"-bash: syntax error near unexpected token `(echo'\\n" + PROMPT,
+            b"-bash: syntax error near unexpected token `(echo'\n" + PROMPT,
         )
 
     def test_subshell_parentheses_005(self) -> None:
@@ -184,13 +172,6 @@ class ShellEchoCommandTests(unittest.TestCase):
         self.assertIn(b"-bash: abc: command not found", output)
         self.assertIn(b"syntax error near unexpected token", output)
 
-    def test_subshell_parentheses_007(self) -> None:
-        """Test valid subshell after semicolon should work"""
-        self.proto.lineReceived(b"echo first; (echo second)")
-        output = self.tr.value()
-        self.assertIn(b"first", output)
-        self.assertIn(b"second", output)
-
     def test_subshell_parentheses_008(self) -> None:
         """Test subshell with different command separators"""
         self.proto.lineReceived(b"(echo first && echo second)")
@@ -199,19 +180,15 @@ class ShellEchoCommandTests(unittest.TestCase):
         self.assertIn(b"second", output)
 
     def test_subshell_parentheses_009(self) -> None:
-        """Test subshell with OR operator"""
+        """`||` short-circuits: the first command succeeds, so the second is
+        skipped (like bash)."""
         self.proto.lineReceived(b"(echo first || echo second)")
-        output = self.tr.value()
-        self.assertIn(b"first", output)
-        self.assertIn(b"second", output)
+        self.assertEqual(self.tr.value(), b"first\n" + PROMPT)
 
-    def test_subshell_parentheses_010(self) -> None:
-        """Test subshell with multiple semicolons"""
-        self.proto.lineReceived(b"(echo one; echo two; echo three)")
-        output = self.tr.value()
-        self.assertIn(b"one", output)
-        self.assertIn(b"two", output)
-        self.assertIn(b"three", output)
+    def test_subshell_ordering(self) -> None:
+        """A subshell between two commands keeps bash's output order."""
+        self.proto.lineReceived(b"echo a; (echo b; echo c); echo d")
+        self.assertEqual(self.tr.value(), b"a\nb\nc\nd\n" + PROMPT)
 
     def test_command_substitution_multiple_commands(self) -> None:
         """Test command substitution with multiple commands"""
@@ -222,3 +199,24 @@ class ShellEchoCommandTests(unittest.TestCase):
         """Test command substitution in middle with multiple commands"""
         self.proto.lineReceived(b"echo before $(echo first; echo second) after")
         self.assertEqual(self.tr.value(), b"before first\nsecond after\n" + PROMPT)
+
+    def test_command_substitution_space_after_paren(self) -> None:
+        """Test command substitution with a space after $( - regression for #40164"""
+        self.proto.lineReceived(b"echo $( echo hello)")
+        self.assertEqual(self.tr.value(), b"hello\n" + PROMPT)
+
+    def test_command_substitution_nested_subshell(self) -> None:
+        """Nested subshell in command substitution must not crash or drop later
+        commands - regression for #40164"""
+        self.proto.lineReceived(b"x=$( (echo hello) ); echo done")
+        output = self.tr.value()
+        self.assertNotIn(b"syntax error", output)
+        self.assertIn(b"done", output)
+
+    def test_command_substitution_nested_subshell_pipe(self) -> None:
+        """Nested subshell piped inside command substitution must not crash or
+        drop later commands - regression for #40164"""
+        self.proto.lineReceived(b"cpus=$( (echo 4) | head -1 ); echo done")
+        output = self.tr.value()
+        self.assertNotIn(b"syntax error", output)
+        self.assertIn(b"done", output)

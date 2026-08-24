@@ -1,4 +1,6 @@
-# Copyright (c) 2016 Michel Oosterhof <michel@oosterhof.net>
+# SPDX-FileCopyrightText: 2016-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 This module contains code to handling saving of honeypot artifacts
@@ -25,14 +27,23 @@ from __future__ import annotations
 import hashlib
 import os
 import tempfile
+import uuid
 from typing import TYPE_CHECKING, Any
-
-from twisted.python import log
 
 from cowrie.core.config import CowrieConfig
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+
+def temp_download_path(prefix: str) -> str:
+    """A unique download-dir path for a temp file that is renamed to its
+    sha256 or serves as honeyfs realfile backing once written. The name
+    carries no session or attacker-controlled text, only the prefix."""
+    return os.path.join(
+        CowrieConfig.get("honeypot", "download_path", fallback="."),
+        f"{prefix}_{uuid.uuid4().hex}",
+    )
 
 
 class Artifact:
@@ -49,6 +60,7 @@ class Artifact:
 
         self.shasum: str = ""
         self.shasumFilename: str = ""
+        self.duplicate: bool = False
 
     def __enter__(self) -> Any:
         return self.fp
@@ -69,8 +81,14 @@ class Artifact:
         return self.fp.fileno()
 
     def close(self, keepEmpty: bool = False) -> tuple[str, str] | None:
+        if self.closed:
+            # Closing is idempotent: a command can close on its normal path and
+            # again on exit() without the second call failing on the closed file.
+            return None
         size: int = self.fp.tell()
         if size == 0 and not keepEmpty:
+            self.fp.close()
+            self.closed = True
             try:
                 os.remove(self.fp.name)
             except FileNotFoundError:
@@ -86,12 +104,16 @@ class Artifact:
         self.shasumFilename = os.path.join(self.artifactDir, self.shasum)
 
         if os.path.exists(self.shasumFilename):
-            log.msg("Not storing duplicate content " + self.shasum)
+            # Content already captured; drop the temp copy. The dedup outcome is
+            # reported once, congruently, on the caller's file_download event
+            # (duplicate=True) rather than as a separate log line here.
             os.remove(self.fp.name)
+            self.duplicate = True
         else:
             os.rename(self.fp.name, self.shasumFilename)
             umask = os.umask(0)
             os.umask(umask)
             os.chmod(self.shasumFilename, 0o666 & ~umask)
+            self.duplicate = False
 
         return self.shasum, self.shasumFilename

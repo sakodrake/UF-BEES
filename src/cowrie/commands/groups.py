@@ -1,3 +1,9 @@
+# SPDX-FileCopyrightText: 2023 Masood Mansoori <masood.mansoori@gmail.com>
+# SPDX-FileCopyrightText: 2018 Free Software Foundation, Inc.
+# SPDX-FileCopyrightText: 2023-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import getopt
@@ -57,7 +63,7 @@ class Command_groups(HoneyPotCommand):
     def output(self, file_content, username):
         groups_string = bytes("", encoding="utf-8")
         if not username:
-            username = self.protocol.user.username
+            username = str(self.user["username"])
         else:
             if not self.check_valid_user(username):
                 self.write(f"groups: '{username}': no such user\n")

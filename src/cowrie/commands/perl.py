@@ -1,5 +1,7 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2016 davegermiquet <davegermiquet@trulycanadian.net>
+# SPDX-FileCopyrightText: 2016-2024 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 This module contains the perl command
@@ -8,8 +10,6 @@ This module contains the perl command
 from __future__ import annotations
 
 import getopt
-
-from twisted.python import log
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -96,7 +96,7 @@ class Command_perl(HoneyPotCommand):
                 return
 
         for value in args:
-            sourcefile = self.fs.resolve_path(value, self.protocol.cwd)
+            sourcefile = self.fs.resolve_path(value, self.cwd)
 
             if self.fs.exists(sourcefile):
                 self.exit()
@@ -110,14 +110,14 @@ class Command_perl(HoneyPotCommand):
             pass
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="perl",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 

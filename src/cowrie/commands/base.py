@@ -1,5 +1,7 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2014-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 # coding=utf-8
 
@@ -10,14 +12,17 @@ import datetime
 import getopt
 import random
 import re
+import stat
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from twisted.internet import error, reactor
-from twisted.python import failure, log
+from twisted.internet import reactor
+from twisted.logger import Logger
 
 from cowrie.core import utils
-from cowrie.shell.command import HoneyPotCommand
+from cowrie.shell.command import HoneyPotCommand, process_status
+from cowrie.shell.fs import A_MODE, A_SIZE
+from cowrie.shell.honeypot import LoopSignal
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -27,7 +32,7 @@ commands: dict[str, Callable] = {}
 
 class Command_whoami(HoneyPotCommand):
     def call(self) -> None:
-        self.write(f"{self.protocol.user.username}\n")
+        self.write(f"{self.user['username']}\n")
 
 
 commands["/usr/bin/whoami"] = Command_whoami
@@ -100,7 +105,7 @@ class Command_w(HoneyPotCommand):
             "USER     TTY      FROM              LOGIN@   IDLE   JCPU   PCPU WHAT\n"
         )
         self.write(
-            f"{self.protocol.user.username:8s} pts/0    {self.protocol.clientIP[:17].ljust(17)} {time.strftime('%H:%M', time.localtime(self.protocol.logintime))}    0.00s  0.00s  0.00s w\n"
+            f"{self.user['username']:8s} pts/0    {self.protocol.clientIP[:17].ljust(17)} {time.strftime('%H:%M', time.localtime(self.protocol.logintime))}    0.00s  0.00s  0.00s w\n"
         )
 
 
@@ -111,7 +116,7 @@ commands["w"] = Command_w
 class Command_who(HoneyPotCommand):
     def call(self) -> None:
         self.write(
-            f"{self.protocol.user.username:8s} pts/0        {time.strftime('%Y-%m-%d', time.localtime(self.protocol.logintime))} {time.strftime('%H:%M', time.localtime(self.protocol.logintime))} ({self.protocol.clientIP})\n"
+            f"{self.user['username']:8s} pts/0        {time.strftime('%Y-%m-%d', time.localtime(self.protocol.logintime))} {time.strftime('%H:%M', time.localtime(self.protocol.logintime))} ({self.protocol.clientIP})\n"
         )
 
 
@@ -120,6 +125,8 @@ commands["who"] = Command_who
 
 
 class Command_echo(HoneyPotCommand):
+    _log = Logger()
+
     def call(self) -> None:
         newline = True
         escape_decode = False
@@ -154,13 +161,13 @@ class Command_echo(HoneyPotCommand):
                 string += "\n"
 
             if escape_decode:
-                data: bytes = codecs.escape_decode(string)[0]  # type: ignore
+                data: bytes = codecs.escape_decode(string)[0]
                 self.writeBytes(data)
             else:
                 self.write(string)
 
         except ValueError:
-            log.msg("echo command received Python incorrect hex escape")
+            self._log.info("echo command received Python incorrect hex escape")
 
 
 commands["/bin/echo"] = Command_echo
@@ -186,7 +193,7 @@ class Command_printf(HoneyPotCommand):
                 if s.endswith("\\c"):
                     s = s[:-2]
 
-                data: bytes = codecs.escape_decode(s)[0]  # type: ignore
+                data: bytes = codecs.escape_decode(s)[0]
                 self.writeBytes(data)
 
 
@@ -208,7 +215,7 @@ commands["reset"] = Command_clear
 class Command_hostname(HoneyPotCommand):
     def call(self) -> None:
         if self.args:
-            if self.protocol.user.username == "root":
+            if self.user["uid"] == 0:
                 self.protocol.hostname = self.args[0]
             else:
                 self.write("hostname: you must be root to change the host name\n")
@@ -221,8 +228,17 @@ commands["hostname"] = Command_hostname
 
 
 class Command_ps(HoneyPotCommand):
+    def columns(self) -> int:
+        """Width to truncate each line to. COLUMNS is an ordinary shell
+        variable that export sets to anything at all, so fall back to the
+        default width rather than trusting it to be a number."""
+        try:
+            return int(self.environ["COLUMNS"])
+        except (KeyError, ValueError):
+            return 80
+
     def call(self) -> None:
-        user = self.protocol.user.username
+        user = str(self.user["username"])
         args = ""
         if self.args:
             args = self.args[0].strip()
@@ -788,13 +804,7 @@ class Command_ps(HoneyPotCommand):
                 ]
             s = "".join([output_array[i][x] for x in line])
             if "w" not in args:
-                s = s[
-                    : (
-                        int(self.environ["COLUMNS"])
-                        if "COLUMNS" in self.environ
-                        else 80
-                    )
-                ]
+                s = s[: self.columns()]
             self.write(f"{s}\n")
 
 
@@ -804,9 +814,9 @@ commands["ps"] = Command_ps
 
 class Command_id(HoneyPotCommand):
     def call(self) -> None:
-        u = self.protocol.user
+        u = self.user
         self.write(
-            f"uid={u.uid}({u.username}) gid={u.gid}({u.username}) groups={u.gid}({u.username})\n"
+            f"uid={u['uid']}({u['username']}) gid={u.get('gid', u['uid'])}({u['username']}) groups={u.get('gid', u['uid'])}({u['username']})\n"
         )
 
 
@@ -838,11 +848,11 @@ class Command_passwd(HoneyPotCommand):
         self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.success",
+        self.protocol.events.dispatch(
+            "cowrie.command.success",
+            "INPUT (%(realm)s): %(input)s",
             realm="passwd",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
         self.password = line.strip()
         self.callbacks.pop(0)(line)
@@ -884,7 +894,7 @@ class Command_shutdown(HoneyPotCommand):
             )
             self.write("\n")
             self.write("The system is going down for maintenance NOW!\n")
-            reactor.callLater(3, self.finish)  # type: ignore[attr-defined]
+            reactor.callLater(3, self.finish)
         elif (
             len(self.args) > 1
             and self.args[0].strip().count("-r")
@@ -896,14 +906,13 @@ class Command_shutdown(HoneyPotCommand):
             )
             self.write("\n")
             self.write("The system is going down for reboot NOW!\n")
-            reactor.callLater(3, self.finish)  # type: ignore[attr-defined]
+            reactor.callLater(3, self.finish)
         else:
             self.write("Try `shutdown --help' for more information.\n")
             self.exit()
 
     def finish(self) -> None:
-        stat = failure.Failure(error.ProcessDone(status=""))
-        self.protocol.terminal.transport.processEnded(stat)
+        self.protocol.terminal.transport.processEnded(process_status(0))
 
 
 commands["/sbin/shutdown"] = Command_shutdown
@@ -921,11 +930,10 @@ class Command_reboot(HoneyPotCommand):
             f"Broadcast message from root@{self.protocol.hostname} (pts/0) ({time.ctime()}):\n\n"
         )
         self.write("The system is going down for reboot NOW!\n")
-        reactor.callLater(3, self.finish)  # type: ignore[attr-defined]
+        reactor.callLater(3, self.finish)
 
     def finish(self) -> None:
-        stat = failure.Failure(error.ProcessDone(status=""))
-        self.protocol.terminal.transport.processEnded(stat)
+        self.protocol.terminal.transport.processEnded(process_status(0))
 
 
 commands["/sbin/reboot"] = Command_reboot
@@ -941,7 +949,8 @@ class Command_history(HoneyPotCommand):
                 return
             count = 1
             for line in self.protocol.historyLines:
-                self.write(f" {count:4d}  {line.decode()}\n")
+                # A typed line need not be valid UTF-8.
+                self.write(f" {count:4d}  {line.decode(errors='replace')}\n")
                 count += 1
         except Exception:
             # Non-interactive shell, do nothing
@@ -972,7 +981,7 @@ class Command_yes(HoneyPotCommand):
             self.write(f"{' '.join(self.args)}\n")
         else:
             self.write("y\n")
-        self.scheduled = reactor.callLater(0.01, self.y)  # type: ignore[attr-defined]
+        self.scheduled = reactor.callLater(0.01, self.y)
 
     def handle_CTRL_C(self) -> None:
         self.scheduled.cancel()
@@ -1036,14 +1045,14 @@ class Command_php(HoneyPotCommand):
             self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.success",
+        self.protocol.events.dispatch(
+            "cowrie.command.success",
+            "INPUT (%(realm)s): %(input)s",
             realm="php",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 
@@ -1083,14 +1092,52 @@ class Command_set(HoneyPotCommand):
 commands["set"] = Command_set
 
 
+class Command_export(HoneyPotCommand):
+    """
+    Mark shell variables for export so they appear in the environment of
+    child processes. With no operands, list the exported variables.
+    """
+
+    def call(self) -> None:
+        args = [a for a in self.args if a != "-p"]
+        if not args:
+            for name in sorted(self.exported):
+                self.write(f'declare -x {name}="{self.environ.get(name, "")}"\n')
+            return
+        for arg in args:
+            if "=" in arg:
+                key, val = arg.split("=", 1)
+                self.environ[key] = val
+                self.exported.add(key)
+            else:
+                self.exported.add(arg)
+
+
+commands["export"] = Command_export
+
+
+class Command_unset(HoneyPotCommand):
+    """
+    Remove variables from both the shell and the exported environment.
+    """
+
+    def call(self) -> None:
+        for arg in self.args:
+            if arg.startswith("-"):
+                continue
+            self.environ.pop(arg, None)
+            self.exported.discard(arg)
+
+
+commands["unset"] = Command_unset
+
+
 class Command_nop(HoneyPotCommand):
     def call(self) -> None:
         pass
 
 
 commands["umask"] = Command_nop
-commands["unset"] = Command_nop
-commands["export"] = Command_nop
 commands["alias"] = Command_nop
 commands["jobs"] = Command_nop
 commands["kill"] = Command_nop
@@ -1098,8 +1145,6 @@ commands["/bin/kill"] = Command_nop
 commands["/bin/pkill"] = Command_nop
 commands["/bin/killall"] = Command_nop
 commands["/bin/killall5"] = Command_nop
-commands["/bin/su"] = Command_nop
-commands["su"] = Command_nop
 commands["/bin/chown"] = Command_nop
 commands["chown"] = Command_nop
 commands["/bin/chgrp"] = Command_nop
@@ -1107,3 +1152,260 @@ commands["chgrp"] = Command_nop
 commands[":"] = Command_nop
 commands["do"] = Command_nop
 commands["done"] = Command_nop
+
+
+class Command_true(HoneyPotCommand):
+    """The ``true`` utility: do nothing, successfully (exit 0)."""
+
+    def start(self) -> None:
+        self.exit(0)
+
+
+commands["true"] = Command_true
+commands["/bin/true"] = Command_true
+
+
+class Command_false(HoneyPotCommand):
+    """The ``false`` utility: do nothing, unsuccessfully (exit 1)."""
+
+    def start(self) -> None:
+        self.exit(1)
+
+
+commands["false"] = Command_false
+commands["/bin/false"] = Command_false
+
+
+class Command_break(HoneyPotCommand):
+    """``break`` -- stop the innermost enclosing for/while/until loop.
+
+    Signals the nearest shell that is currently running a loop; the loop's
+    executor consumes the signal at the end of the current body. Outside any
+    loop it is a no-op, matching how the honeypot tolerates stray builtins.
+
+    Loop state is tracked per shell, not per function call, so a ``break`` in a
+    function body still targets an enclosing loop in the same shell. Real bash
+    ignores a ``break`` that is not lexically inside a loop in the running
+    function; emulating that would need a per-function loop scope.
+    """
+
+    signal = LoopSignal.BREAK
+
+    def call(self) -> None:
+        for item in reversed(self.protocol.cmdstack):
+            if getattr(item, "_loop_depth", 0) > 0:
+                item._loop_signal = self.signal
+                return
+
+
+class Command_continue(Command_break):
+    """``continue`` -- skip to the next iteration of the innermost loop."""
+
+    signal = LoopSignal.CONTINUE
+
+
+commands["break"] = Command_break
+commands["continue"] = Command_continue
+
+
+class _TestError(Exception):
+    """A malformed test expression; ``test`` reports it and exits 2.
+
+    Message templates live here so the call sites raise with a short tag,
+    keeping the human-readable text in one place.
+    """
+
+    _MESSAGES: ClassVar[dict[str, str]] = {
+        "too_many": "too many arguments",
+        "integer": "integer expression expected",
+        "unary": "{token}: unary operator expected",
+        "binary": "{token}: binary operator expected",
+    }
+
+    def __init__(self, kind: str, token: str = "") -> None:
+        super().__init__(self._MESSAGES[kind].format(token=token))
+
+
+class Command_test(HoneyPotCommand):
+    """The ``test`` / ``[`` conditional utility.
+
+    Evaluates an expression and exits 0 (true) or 1 (false); a malformed
+    expression exits 2. Supports the operators shell scripts rely on for flow
+    control: file tests against the emulated filesystem (``-e -f -d -r -w -x
+    -s -L -h -b -c -p -S -g -u -k``), string tests (``-z -n``, ``= == != < >``)
+    and integer comparisons (``-eq -ne -lt -le -gt -ge``), plus ``!`` negation
+    and ``-a`` / ``-o`` combination.
+
+    Invoked as ``[`` the final argument must be ``]``.
+    """
+
+    # Set by the ``[`` alias so the closing bracket is required.
+    require_bracket: bool = False
+    name: str = "test"
+
+    _STRING_OPS = ("=", "==", "!=", "<", ">")
+    _INT_OPS = ("-eq", "-ne", "-lt", "-le", "-gt", "-ge")
+    _UNARY_FILE_OPS = (
+        "-e",
+        "-f",
+        "-d",
+        "-r",
+        "-w",
+        "-x",
+        "-s",
+        "-L",
+        "-h",
+        "-b",
+        "-c",
+        "-p",
+        "-S",
+        "-g",
+        "-u",
+        "-k",
+    )
+
+    def call(self) -> None:
+        args = list(self.args)
+        if self.require_bracket:
+            if not args or args[-1] != "]":
+                self.errorWrite(f"{self.name}: missing `]'\n")
+                self.exit_code = 2
+                return
+            args = args[:-1]
+
+        try:
+            result = self._eval(args)
+        except _TestError as exc:
+            self.errorWrite(f"{self.name}: {exc}\n")
+            self.exit_code = 2
+            return
+        self.exit_code = 0 if result else 1
+
+    def _eval(self, args: list[str]) -> bool:
+        n = len(args)
+        if n == 0:
+            return False
+        if n == 1:
+            # A single argument is true when it is a non-empty string.
+            return args[0] != ""
+        if args[0] == "!":
+            # Negation of the remaining expression.
+            return not self._eval(args[1:])
+        if n == 2:
+            return self._unary(args[0], args[1])
+        if n == 3:
+            # `STR1 -a STR2` / `STR1 -o STR2` combine two single-argument
+            # (non-empty) tests; otherwise the middle word is a binary operator.
+            if args[1] == "-a":
+                return self._eval(args[:1]) and self._eval(args[2:])
+            if args[1] == "-o":
+                return self._eval(args[:1]) or self._eval(args[2:])
+            return self._binary(args[0], args[1], args[2])
+        if n == 4 and args[0] == "(" and args[3] == ")":
+            return self._eval(args[1:3])
+        # `EXPR -a EXPR` / `EXPR -o EXPR`: bash deprecates these, but scripts
+        # still use them. Split on the first top-level -a / -o we find.
+        for combiner in ("-o", "-a"):
+            if combiner in args:
+                idx = args.index(combiner)
+                left = self._eval(args[:idx])
+                right = self._eval(args[idx + 1 :])
+                return (left or right) if combiner == "-o" else (left and right)
+        raise _TestError("too_many")
+
+    def _unary(self, op: str, operand: str) -> bool:
+        if op == "-z":
+            return len(operand) == 0
+        if op == "-n":
+            return len(operand) != 0
+        if op in self._UNARY_FILE_OPS:
+            return self._file_test(op, operand)
+        raise _TestError("unary", op)
+
+    def _binary(self, left: str, op: str, right: str) -> bool:
+        if op in self._STRING_OPS:
+            if op in ("=", "=="):
+                return left == right
+            if op == "!=":
+                return left != right
+            if op == "<":
+                return left < right
+            return left > right  # ">"
+        if op in self._INT_OPS:
+            try:
+                a, b = int(left), int(right)
+            except ValueError:
+                raise _TestError("integer", op) from None
+            return {
+                "-eq": a == b,
+                "-ne": a != b,
+                "-lt": a < b,
+                "-le": a <= b,
+                "-gt": a > b,
+                "-ge": a >= b,
+            }[op]
+        raise _TestError("binary", op)
+
+    def _file_test(self, op: str, operand: str) -> bool:
+        if not operand:
+            # An empty path is not any kind of file: bash reports every file
+            # test on "" as false. Short-circuit before resolving it.
+            return False
+        path = self.fs.resolve_path(operand, self.cwd)
+        if op in ("-L", "-h"):
+            try:
+                return bool(self.fs.islink(path))
+            except Exception:
+                return False
+        if op == "-d":
+            return bool(self.fs.isdir(path))
+        if op == "-f":
+            return bool(self.fs.isfile(path))
+        if op == "-e":
+            return bool(self.fs.exists(path))
+        if op in ("-r", "-w"):
+            # No per-user permission model; treat any existing path as readable
+            # and writable, which is true for the honeypot's root sessions.
+            return bool(self.fs.exists(path))
+        if op == "-x":
+            return self._has_mode(path, stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        if op == "-s":
+            entry = self._stat(path)
+            return entry is not None and entry[A_SIZE] > 0
+        if op == "-g":
+            return self._has_mode(path, stat.S_ISGID)
+        if op == "-u":
+            return self._has_mode(path, stat.S_ISUID)
+        if op == "-k":
+            return self._has_mode(path, stat.S_ISVTX)
+        # -b -c -p -S: special file types we do not model; report absent.
+        return False
+
+    def _stat(self, path: str) -> list[Any] | None:
+        try:
+            entry: list[Any] | None = self.fs.getfile(path)
+        except Exception:
+            return None
+        return entry
+
+    def _has_mode(self, path: str, mask: int) -> bool:
+        entry = self._stat(path)
+        if entry is None:
+            return False
+        try:
+            return bool(entry[A_MODE] & mask)
+        except (IndexError, TypeError):
+            return False
+
+
+class Command_lbracket(Command_test):
+    """The ``[`` alias of ``test``; requires a closing ``]``."""
+
+    require_bracket = True
+    name = "["
+
+
+commands["test"] = Command_test
+commands["/usr/bin/test"] = Command_test
+commands["["] = Command_lbracket
+commands["/usr/bin/["] = Command_lbracket

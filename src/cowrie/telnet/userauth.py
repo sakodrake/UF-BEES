@@ -1,4 +1,8 @@
-# Copyright (C) 2015, 2016 GoSecure Inc.
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2015, 2016 GoSecure Inc.
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 """
 Telnet Transport and Authentication for the Honeypot
 
@@ -8,6 +12,7 @@ Telnet Transport and Authentication for the Honeypot
 from __future__ import annotations
 
 import struct
+from typing import TYPE_CHECKING, cast
 
 from twisted.conch.telnet import (
     ECHO,
@@ -18,10 +23,15 @@ from twisted.conch.telnet import (
     ITelnetProtocol,
 )
 from twisted.internet.protocol import connectionDone
-from twisted.python import failure, log
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
 from cowrie.core.credentials import UsernamePasswordIP
+
+if TYPE_CHECKING:
+    from twisted.python import failure
+
+    from cowrie.telnet.transport import CowrieTelnetTransport
 
 # NEW-ENVIRON telnet option (RFC 1572)
 # Used for environment variable exchange and targeted by CVE-2026-24061
@@ -38,6 +48,12 @@ NEW_ENVIRON_VALUE = 1  # Variable value follows
 NEW_ENVIRON_ESC = 2  # Escape byte for literal VAR/VALUE/USERVAR bytes in data
 NEW_ENVIRON_USERVAR = 3  # User-defined variable name follows
 
+# The subnegotiation payload is attacker-controlled and Twisted buffers it
+# between IAC SB and IAC SE without a length limit of its own, so bound how
+# much of it the per-byte environment parser will accept. Real clients send
+# at most a few hundred bytes of environment variables.
+MAX_NEW_ENVIRON_SIZE = 4096
+
 
 class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
     """
@@ -45,16 +61,22 @@ class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
     protocol is replaced with HoneyPotTelnetSession.
     """
 
+    _log = Logger()
+
     loginPrompt = b"login: "
     passwordPrompt = b"Password: "
     windowSize: list[int]
     cve_2026_24061_user: str | None = None
 
     def connectionMade(self):
-        # self.transport.negotiationMap[NAWS] = self.telnet_NAWS
-        # Initial option negotation. Want something at least for Mirai
-        # for opt in (NAWS,):
-        #    self.transport.doChain(opt).addErrback(log.err)
+        self.transport.negotiationMap[NAWS] = self.telnet_NAWS
+        # Initial option negotiation. Want something at least for Mirai
+        for opt in (NAWS,):
+            self.transport.doChain(opt).addErrback(
+                lambda f: self._log.failure(
+                    "Telnet option negotiation failed", failure=f
+                )
+            )
 
         # Register NEW-ENVIRON subnegotiation handler for CVE-2026-24061 detection
         self.transport.negotiationMap[NEW_ENVIRON] = self.telnet_NEW_ENVIRON
@@ -93,25 +115,29 @@ class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
         # CVE-2026-24061 exploit bypass: use the extracted username if set
         if self.cve_2026_24061_user is not None:
             exploit_user = self.cve_2026_24061_user
-            log.msg(
-                eventid="cowrie.telnet.exploit_success",
-                format="CVE-2026-24061 exploit successful: logging in as %(username)s",
-                cve="CVE-2026-24061",
-                username=exploit_user,
-                original_username=username.decode("utf-8", errors="replace")
-                if isinstance(username, bytes)
-                else username,
-                attempted_command=password.decode("utf-8", errors="replace")
-                if isinstance(password, bytes)
-                else password,
-            )
-            username = exploit_user.encode() if isinstance(exploit_user, str) else exploit_user
+            events = cast("CowrieTelnetTransport", self.transport).events
+            if events:
+                events.dispatch(
+                    "cowrie.telnet.exploit_success",
+                    "CVE-2026-24061 exploit successful: logging in as %(username)s",
+                    cve="CVE-2026-24061",
+                    username=exploit_user,
+                    original_username=username.decode("utf-8", errors="replace")
+                    if isinstance(username, bytes)
+                    else username,
+                    attempted_command=password.decode("utf-8", errors="replace")
+                    if isinstance(password, bytes)
+                    else password,
+                )
+            username = exploit_user.encode()
             password = b""  # Exploit bypasses password
             self.cve_2026_24061_user = None  # Clear the flag
 
         def login(ignored):
             self.src_ip = self.transport.getPeer().host
-            creds = UsernamePasswordIP(username, password, self.src_ip)
+            creds = UsernamePasswordIP(
+                username, password, self.src_ip, events=self.transport.events
+            )
             d = self.portal.login(creds, self.src_ip, ITelnetProtocol)
             d.addCallback(self._cbLogin)
             d.addErrback(self._ebLogin)
@@ -169,7 +195,7 @@ class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
             width, height = struct.unpack("!HH", b"".join(data))
             self.windowSize = [height, width]
         else:
-            log.msg("Wrong number of NAWS bytes")
+            self._log.info("Wrong number of NAWS bytes")
 
     def telnet_NEW_ENVIRON(self, data: list[bytes]) -> None:
         """
@@ -190,6 +216,13 @@ class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
         if len(raw_data) < 1:
             return
 
+        if len(raw_data) > MAX_NEW_ENVIRON_SIZE:
+            self._log.info(
+                "Telnet NEW-ENVIRON subnegotiation too large ({size} bytes), ignoring",
+                size=len(raw_data),
+            )
+            return
+
         command = raw_data[0]
 
         # We only care about IS (0) and INFO (2) - client sending values
@@ -198,6 +231,7 @@ class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
 
         # Parse the environment variables
         env_vars = self._parse_new_environ_data(raw_data[1:])
+        events = cast("CowrieTelnetTransport", self.transport).events
 
         # Log each environment variable
         for name, value in env_vars.items():
@@ -205,23 +239,25 @@ class HoneyPotTelnetAuthProtocol(AuthenticatingTelnetProtocol):
             self.environ_received[name] = value
 
             # Log the environment variable (matches SSH cowrie.client.var pattern)
-            log.msg(
-                eventid="cowrie.client.var",
-                format="Telnet NEW-ENVIRON: %(name)s=%(value)s",
-                name=name,
-                value=value,
-            )
+            if events:
+                events.dispatch(
+                    "cowrie.client.var",
+                    "Telnet NEW-ENVIRON: %(name)s=%(value)s",
+                    name=name,
+                    value=value,
+                )
 
             # CVE-2026-24061 detection: USER environment variable with -f flag
             # This exploit bypasses authentication in GNU inetutils telnetd <= 2.7
             if name.upper() == "USER" and value.startswith("-f"):
-                log.msg(
-                    eventid="cowrie.telnet.exploit_attempt",
-                    format="CVE-2026-24061 exploit attempt detected: USER=%(value)s",
-                    cve="CVE-2026-24061",
-                    name=name,
-                    value=value,
-                )
+                if events:
+                    events.dispatch(
+                        "cowrie.telnet.exploit_attempt",
+                        "CVE-2026-24061 exploit attempt detected: USER=%(value)s",
+                        cve="CVE-2026-24061",
+                        name=name,
+                        value=value,
+                    )
                 # If vulnerability emulation is enabled, set up auth bypass
                 if CowrieConfig.getboolean(
                     "telnet", "cve_2026_24061_vulnerable", fallback=False

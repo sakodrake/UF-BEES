@@ -5,8 +5,10 @@ always composed of an op-code, a status code (for responses), and
 any needed data thereafter.
 """
 
-# Copyright (c) 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from twisted.internet.address import IPv4Address, IPv6Address
 from twisted.internet.protocol import Factory, Protocol
-from twisted.python import log
+from twisted.logger import Logger
 
 from backend_pool.nat import NATService
 from backend_pool.pool_service import NoAvailableVMs, PoolService
@@ -34,6 +36,8 @@ class PoolServer(Protocol):
     """
     Main PoolServer
     """
+
+    _log = Logger()
 
     def __init__(self, factory: PoolServerFactory) -> None:
         self.factory: PoolServerFactory = factory
@@ -80,9 +84,8 @@ class PoolServer(Protocol):
             recv = struct.unpack(f"!{ip_len}s", data[3:])
             attacker_ip = recv[0].decode()
 
-            log.msg(
-                eventid="cowrie.backend_pool.server",
-                format="Requesting a VM for attacker @ %(attacker_ip)s",
+            self._log.info(
+                "Requesting a VM for attacker @ {attacker_ip}",
                 attacker_ip=attacker_ip,
             )
 
@@ -92,11 +95,7 @@ class PoolServer(Protocol):
                     guest_ip,
                     guest_snapshot,
                 ) = self.factory.pool_service.request_vm(attacker_ip)
-                log.msg(
-                    eventid="cowrie.backend_pool.server",
-                    format="Providing VM id %(guest_id)s",
-                    guest_id=guest_id,
-                )
+                self._log.info("Providing VM id {guest_id}", guest_id=guest_id)
 
                 ssh_port: int = CowrieConfig.getint(
                     "backend_pool", "guest_ssh_port", fallback=22
@@ -140,10 +139,7 @@ class PoolServer(Protocol):
                         guest_snapshot.encode(),
                     )
             except NoAvailableVMs:
-                log.msg(
-                    eventid="cowrie.backend_pool.server",
-                    format="No VM available, returning error code",
-                )
+                self._log.info("No VM available, returning error code")
                 response = struct.pack("!cI", RES_OP_R, 1)
 
         elif res_op == RES_OP_F:
@@ -151,11 +147,7 @@ class PoolServer(Protocol):
             recv = struct.unpack("!I", data[1:])
             guest_id = recv[0]
 
-            log.msg(
-                eventid="cowrie.backend_pool.server",
-                format="Freeing VM %(guest_id)s",
-                guest_id=guest_id,
-            )
+            self._log.info("Freeing VM {guest_id}", guest_id=guest_id)
 
             # free the NAT
             if (not self.local_pool and self.use_nat) or self.pool_only:
@@ -169,10 +161,8 @@ class PoolServer(Protocol):
             recv = struct.unpack("!I", data[1:])
             guest_id = recv[0]
 
-            log.msg(
-                eventid="cowrie.backend_pool.server",
-                format="Reusing VM %(guest_id)s (not used by attacker)",
-                guest_id=guest_id,
+            self._log.info(
+                "Reusing VM {guest_id} (not used by attacker)", guest_id=guest_id
             )
 
             # free the NAT
@@ -186,10 +176,12 @@ class PoolServer(Protocol):
             self.transport.write(response)
 
 
-class PoolServerFactory(Factory):
+class PoolServerFactory(Factory[PoolServer]):
     """
     Factory for PoolServer
     """
+
+    _log = Logger()
 
     def __init__(self) -> None:
         self.initialised: bool = False
@@ -209,16 +201,14 @@ class PoolServerFactory(Factory):
             self.pool_service.start_pool()
 
     def stopFactory(self) -> None:
-        log.msg(eventid="cowrie.backend_pool.server", format="Stopping backend pool...")
+        self._log.info("Stopping backend pool...")
         if self.pool_service:
             self.pool_service.shutdown_pool()
 
-    def buildProtocol(self, addr: IAddress) -> PoolServer:
+    def buildProtocol(self, addr: IAddress | None) -> PoolServer:
+        assert addr is not None
         assert isinstance(addr, (IPv4Address, IPv6Address))
-        log.msg(
-            eventid="cowrie.backend_pool.server",
-            format="Received connection from %(host)s:%(port)s",
-            host=addr.host,
-            port=addr.port,
+        self._log.info(
+            "Received connection from {host}:{port}", host=addr.host, port=addr.port
         )
         return PoolServer(self)

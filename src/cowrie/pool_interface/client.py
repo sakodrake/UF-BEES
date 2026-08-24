@@ -1,12 +1,14 @@
-# Copyright (c) 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2021 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 import struct
 
 from twisted.internet.protocol import ClientFactory, Protocol
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
 
@@ -15,6 +17,8 @@ class PoolClient(Protocol):
     """
     Represents the connection between a protocol instance (SSH or Telnet) and a QEMU pool
     """
+
+    _log = Logger()
 
     def __init__(self, factory):
         self.factory = factory
@@ -58,7 +62,7 @@ class PoolClient(Protocol):
     def dataReceived(self, data):
         # only makes sense to process data if we have a parent to send it to
         if not self.parent:
-            log.err("Parent not set, discarding data from pool")
+            self._log.error("Parent not set, discarding data from pool")
             return
 
         response = struct.unpack("!cI", data[0:5])
@@ -76,9 +80,8 @@ class PoolClient(Protocol):
 
         elif res_op == b"r":
             if res_code != 0:
-                log.msg(
-                    eventid="cowrie.pool_client",
-                    format="Error in pool while requesting guest. Losing connection...",
+                self._log.error(
+                    "Error in pool while requesting guest. Losing connection..."
                 )
                 self.parent.loseConnection()
                 return

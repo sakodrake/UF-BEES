@@ -1,13 +1,14 @@
-# Copyright (c) 2020 Julius ter Pelkwijk <pelkwijk@gmail.com>
-# Based on code made by Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2020 Julius ter Pelkwijk <pelkwijk@gmail.com>
+# SPDX-FileCopyrightText: 2020-2024 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
-import os
+import posixpath
 import zipfile
 
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.fs import A_REALFILE
@@ -16,6 +17,8 @@ commands = {}
 
 
 class Command_unzip(HoneyPotCommand):
+    _log = Logger()
+
     def mkfullpath(self, path: str) -> None:
         components, d = path.split("/"), []
         while len(components):
@@ -24,8 +27,8 @@ class Command_unzip(HoneyPotCommand):
             if not self.fs.exists(directory):
                 self.fs.mkdir(
                     directory,
-                    self.protocol.user.uid,
-                    self.protocol.user.gid,
+                    self.user["uid"],
+                    self.user["gid"],
                     4096,
                     33188,
                 )
@@ -62,7 +65,7 @@ class Command_unzip(HoneyPotCommand):
 
         filename = self.args[0]
 
-        path = self.fs.resolve_path(filename, self.protocol.cwd)
+        path = self.fs.resolve_path(filename, self.cwd)
         if not path:
             self.write(
                 f"unzip:  cannot find or open {filename}, {filename}.zip or {filename}.ZIP.\n"
@@ -107,25 +110,29 @@ class Command_unzip(HoneyPotCommand):
             return
         self.write(f"Archive:  {filename}\n")
         for f in t:
-            dest = self.fs.resolve_path(f.filename.strip("/"), self.protocol.cwd)
+            dest = self.fs.resolve_path(f.filename.strip("/"), self.cwd)
             self.write(f"  inflating: {f.filename}\n")
             if not len(dest):
                 continue
             if f.is_dir():
                 self.fs.mkdir(
-                    dest, self.protocol.user.uid, self.protocol.user.gid, 4096, 33188
+                    dest,
+                    self.user["uid"],
+                    self.user["gid"],
+                    4096,
+                    33188,
                 )
             elif not f.is_dir():
-                self.mkfullpath(os.path.dirname(dest))
+                self.mkfullpath(posixpath.dirname(dest))
                 self.fs.mkfile(
                     dest,
-                    self.protocol.user.uid,
-                    self.protocol.user.gid,
+                    self.user["uid"],
+                    self.user["gid"],
                     f.file_size,
                     33188,
                 )
             else:
-                log.msg(f"  skipping: {f.filename}\n")
+                self._log.info("  skipping: {filename}\n", filename=f.filename)
 
 
 commands["/bin/unzip"] = Command_unzip

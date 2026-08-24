@@ -1,5 +1,8 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2018 FabiolaBusch
+# SPDX-FileCopyrightText: 2009 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2020-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 # Modified by Fabiola Buschendorf, https://github.com/FabiolaBusch
@@ -14,7 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from twisted.internet import defer, reactor
 from twisted.internet.defer import inlineCallbacks
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -42,6 +45,8 @@ class Command_yum(HoneyPotCommand):
     Any installed packages, places a 'Segfault' at /usr/bin/PACKAGE.'''
     """
 
+    _log = Logger()
+
     packages: dict[str, dict[str, Any]]
 
     @inlineCallbacks
@@ -61,7 +66,7 @@ class Command_yum(HoneyPotCommand):
         d: defer.Deferred = defer.Deferred()
         if time2:
             time = random.randint(int(time * 100), int(time2 * 100)) / 100.0
-        reactor.callLater(time, d.callback, None)  # type: ignore[attr-defined]
+        reactor.callLater(time, d.callback, None)
         return d
 
     @inlineCallbacks
@@ -255,7 +260,7 @@ Options:
 
     @inlineCallbacks
     def lineReceived(self, line):
-        log.msg("INPUT (yum):", line)
+        self._log.info("INPUT (yum): {line}", line=line)
 
         self.write("Downloading packages:\n")
         yield self.sleep(0.5, 1)

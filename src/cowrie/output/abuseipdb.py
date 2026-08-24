@@ -1,24 +1,7 @@
-# MIT License
+# SPDX-FileCopyrightText: 2020 Benjamin Stephens <premier_contact@ben-stephens.net>
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Copyright (c) 2020 Benjamin Stephens <premier_contact@ben-stephens.net>
-#
-# Permission is hereby granted, free of charge, to any person obtaining a
-# copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation
-# the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the
-# Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-# DEALINGS IN THE SOFTWARE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 """
@@ -35,14 +18,13 @@ __version__ = "0.3b3"
 
 import pickle
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from json.decoder import JSONDecodeError
 from pathlib import Path
 from time import sleep, time
 
 from treq import post
 from twisted.internet import defer, reactor, threads
-from twisted.python import log
 from twisted.web import http
 
 from cowrie.core import output
@@ -67,13 +49,15 @@ class Output(output.Output):
         self.state_path = Path(CowrieConfig.get("output_abuseipdb", "dump_path"))
         self.state_dump = self.state_path / DUMP_FILE
 
-        self.logbook = LogBook(self.tolerance_attempts, self.state_dump)
+        self.logbook = LogBook(self.tolerance_attempts, self.state_dump, self.dispatch)
         # Pass our instance of LogBook() to Reporter() so we don't end up
         # working with different records.
-        self.reporter = Reporter(self.logbook, self.tolerance_attempts)
+        self.reporter = Reporter(self.logbook, self.tolerance_attempts, self.dispatch)
 
         # We store the LogBook state any time a shutdown occurs. The rest of
-        # our start-up is just for loading and cleaning the previous state
+        # our start-up is just for loading and cleaning the previous state.
+        # Default to the current setting so a missing state needs no resize.
+        tolerated = self.tolerance_attempts
         try:
             with open(self.state_dump, "rb") as f:
                 self.logbook.update(pickle.load(f))
@@ -123,7 +107,7 @@ class Output(output.Output):
         except UnboundLocalError:
             pass
 
-        log.msg(
+        self.dispatch(
             eventid="cowrie.abuseipdb.started",
             format=f"AbuseIPDB Plugin version {__version__} started. Currently in beta.",
         )
@@ -194,7 +178,8 @@ class LogBook(dict):
     Reporter(). Sharing is caring.
     """
 
-    def __init__(self, tolerance_attempts, state_dump):
+    def __init__(self, tolerance_attempts, state_dump, dispatch):
+        self.dispatch = dispatch
         self.sleeping = False
         self.sleep_until: float = 0.0
         self.tolerance_attempts = tolerance_attempts
@@ -218,7 +203,7 @@ class LogBook(dict):
         self.sleeping = False
         self.sleep_until = 0
         self.recall = reactor.callLater(CLEAN_DUMP_SCHED, self.cleanup_and_dump_state)
-        log.msg(
+        self.dispatch(
             eventid="cowrie.abuseipdb.wakeup",
             format="AbuseIPDB plugin resuming activity after receiving "
             "Retry-After header in previous response.",
@@ -338,9 +323,10 @@ class Reporter:
     HTTP client and methods for preparing report paramaters.
     """
 
-    def __init__(self, logbook, attempts):
+    def __init__(self, logbook, attempts, dispatch):
         self.logbook = logbook
         self.attempts = attempts
+        self.dispatch = dispatch
         self.headers = {
             "User-Agent": "Cowrie Honeypot AbuseIPDB plugin",
             "Accept": "application/json",
@@ -380,12 +366,11 @@ class Reporter:
 
     @staticmethod
     def epoch_to_string_utc(t):
-        t_utc = datetime.utcfromtimestamp(t)
+        t_utc = datetime.fromtimestamp(t, timezone.utc)
         return t_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    @staticmethod
-    def log_response_failed(ip, response, reason):
-        log.msg(
+    def log_response_failed(self, ip, response, reason):
+        self.dispatch(
             eventid="cowrie.abuseipdb.reportfail",
             format="AbuseIPDB plugin failed to report IP %(IP)s. Received HTTP "
             "status code %(response)s in response. Reason: %(reason)s.",
@@ -401,10 +386,11 @@ class Reporter:
                 url=ABUSEIP_URL,
                 headers=self.headers,
                 params=params,
+                allow_redirects=False,
             )
 
         except Exception as e:
-            log.msg(
+            self.dispatch(
                 eventid="cowrie.abuseipdb.reportfail",
                 format="AbuseIPDB plugin failed to report IP %(IP)s. "
                 "Exception raised: %(exception)s.",
@@ -428,7 +414,7 @@ class Reporter:
 
         j = yield response.json()
 
-        log.msg(
+        self.dispatch(
             eventid="cowrie.abuseipdb.reportedip",
             format="AbuseIPDB plugin successfully reported %(IP)s. Current "
             "AbuseIPDB confidence score for this IP is %(confidence)s",
@@ -459,7 +445,7 @@ class Reporter:
             if retry > 86340:
                 yield threads.deferToThread(self.sleeper_thread)
 
-                log.msg(
+                self.dispatch(
                     eventid="cowrie.abuseipdb.ratelimited",
                     format="AbuseIPDB plugin received Retry-After header > 86340 "
                     "seconds in previous response. Possible delayed quota "
@@ -480,7 +466,7 @@ class Reporter:
             self.logbook.cleanup_and_dump_state(mode=1)
 
             self.epoch_to_string_utc(self.logbook.sleep_until)
-            log.msg(
+            self.dispatch(
                 eventid="cowrie.abuseipdb.ratelimited",
                 format="AbuseIPDB plugin received Retry-After header in "
                 "response. Reporting activity will resume in "

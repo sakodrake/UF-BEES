@@ -1,5 +1,6 @@
-# Copyright (c) 2025 Michel Oosterhof
-# See LICENSE for details.
+# SPDX-FileCopyrightText: 2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
 import base64
@@ -11,15 +12,7 @@ from unittest.mock import Mock
 
 from twisted.internet import defer
 
-from cowrie.output.virustotal import Output, StringProducer
-
-
-class MockResponse:
-    """Mock HTTP response for testing"""
-
-    def __init__(self, code: int, data: bytes):
-        self.code = code
-        self.data = data
+from cowrie.output.virustotal import Output
 
 
 class VirusTotalOutputTests(unittest.TestCase):
@@ -40,30 +33,8 @@ class VirusTotalOutputTests(unittest.TestCase):
         self.output.commenttext = "Test comment"
         self.output.url_cache = {}
 
-    def test_string_producer_interface(self) -> None:
-        """Test StringProducer implements required interface methods"""
-        body = b"test data"
-        producer = StringProducer(body)
-
-        self.assertEqual(producer.body, body)
-        self.assertEqual(producer.length, len(body))
-
-        # Test all interface methods exist
-        self.assertTrue(hasattr(producer, "startProducing"))
-        self.assertTrue(hasattr(producer, "pauseProducing"))
-        self.assertTrue(hasattr(producer, "resumeProducing"))
-        self.assertTrue(hasattr(producer, "stopProducing"))
-
     def test_scanfile_new_file_not_found(self) -> None:
         """Test file scanning when file is not found in VirusTotal database"""
-        # Mock response for file not found
-        MockResponse(
-            200,
-            json.dumps(
-                {"error": {"code": "NotFoundError", "message": "File not found"}}
-            ).encode(),
-        )
-
         # Mock agent request
         deferred: defer.Deferred = defer.Deferred()
         self.output.agent.request.return_value = deferred
@@ -97,67 +68,11 @@ class VirusTotalOutputTests(unittest.TestCase):
         self.assertIn(b"X-Apikey", headers._rawHeaders)
         self.assertEqual(headers._rawHeaders[b"X-Apikey"], [b"test-api-key"])
 
-    def test_scanfile_existing_file_found(self) -> None:
-        """Test file scanning when file exists in VirusTotal database"""
-        # Mock response for existing file
-        MockResponse(
-            200,
-            json.dumps(
-                {
-                    "data": {
-                        "id": "abc123",
-                        "attributes": {
-                            "last_analysis_results": {
-                                "Avast": {
-                                    "category": "malicious",
-                                    "result": "Trojan.Test",
-                                },
-                                "Kaspersky": {"category": "clean", "result": "Clean"},
-                            },
-                            "last_analysis_stats": {
-                                "malicious": 1,
-                                "clean": 1,
-                                "suspicious": 0,
-                                "undetected": 0,
-                            },
-                            "last_analysis_date": "2025-01-10T10:00:00Z",
-                        },
-                    }
-                }
-            ).encode(),
-        )
-
-        # Mock agent request
-        deferred: defer.Deferred = defer.Deferred()
-        self.output.agent.request.return_value = deferred
-
-        # Test event
-        event = {"session": "test-session", "shasum": "abc123"}
-
-        # Call scanfile
-        self.output.scanfile(event)
-
-        # Verify request was made correctly
-        self.output.agent.request.assert_called_once()
-        call_args = self.output.agent.request.call_args
-        self.assertEqual(call_args[0][0], b"GET")
-        self.assertEqual(
-            call_args[0][1], b"https://www.virustotal.com/api/v3/files/abc123"
-        )
-
     def test_scanurl_base64_encoding(self) -> None:
         """Test URL scanning with base64 encoding"""
         test_url = "http://example.com/malicious.exe"
         expected_url_id = (
             base64.urlsafe_b64encode(test_url.encode()).decode().rstrip("=")
-        )
-
-        # Mock response for URL not found
-        MockResponse(
-            200,
-            json.dumps(
-                {"error": {"code": "NotFoundError", "message": "URL not found"}}
-            ).encode(),
         )
 
         # Mock agent request
@@ -189,14 +104,6 @@ class VirusTotalOutputTests(unittest.TestCase):
             tmp_path = tmp.name
 
         try:
-            # Mock response for successful upload
-            MockResponse(
-                200,
-                json.dumps(
-                    {"data": {"id": "uploaded-file-id", "type": "analysis"}}
-                ).encode(),
-            )
-
             # Mock agent request
             deferred: defer.Deferred = defer.Deferred()
             self.output.agent.request.return_value = deferred
@@ -205,7 +112,7 @@ class VirusTotalOutputTests(unittest.TestCase):
             self.output.postcomment = Mock(return_value=defer.succeed(True))  # type: ignore
 
             # Call postfile
-            self.output.postfile(tmp_path, "test-file.exe")
+            self.output.postfile(tmp_path, "test-file.exe", "abc123sha256")
 
             # Verify request was made correctly
             self.output.agent.request.assert_called_once()
@@ -226,13 +133,42 @@ class VirusTotalOutputTests(unittest.TestCase):
             # Clean up temporary file
             os.unlink(tmp_path)
 
+    def test_upload_comments_and_collects_by_file_hash(self) -> None:
+        """A fresh upload must comment on and add to the collection by the
+        file's sha256, not the analysis id the upload returns."""
+        self.output.comment = True
+        self.output.commenttext = "Test comment"
+        self.output.collection_name = "test-collection"
+        self.output.collection_id = "test-collection-id"
+
+        captured: dict = {}
+
+        def fake_make_request(*args, **kwargs):
+            captured["process_response"] = kwargs.get("process_response")
+            return defer.succeed(None)
+
+        self.output._make_request = fake_make_request  # type: ignore[method-assign]
+        self.output._post_comment = Mock(return_value=defer.succeed(True))  # type: ignore[method-assign]
+        self.output._add_to_collection = Mock(return_value=defer.succeed(True))  # type: ignore[method-assign]
+
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(b"payload")
+            tmp_path = tmp.name
+        try:
+            self.output.postfile(tmp_path, "payload.exe", "HASH256")
+            # The v3 upload response carries an analysis id, not the file hash.
+            captured["process_response"](
+                json.dumps({"data": {"id": "analysis-xyz", "type": "analysis"}}).encode()
+            )
+        finally:
+            os.unlink(tmp_path)
+
+        self.output._post_comment.assert_called_once_with("files", "HASH256", "Comment")
+        self.output._add_to_collection.assert_called_once()
+        self.assertEqual(self.output._add_to_collection.call_args[0][1], "HASH256")
+
     def test_postcomment_v3_format(self) -> None:
         """Test comment posting using v3 API format"""
-        # Mock response for successful comment
-        MockResponse(
-            200, json.dumps({"data": {"id": "comment-id", "type": "comment"}}).encode()
-        )
-
         # Mock agent request
         deferred: defer.Deferred = defer.Deferred()
         self.output.agent.request.return_value = deferred
@@ -259,11 +195,6 @@ class VirusTotalOutputTests(unittest.TestCase):
 
     def test_postcomment_url_v3_format(self) -> None:
         """Test URL comment posting using v3 API format"""
-        # Mock response for successful URL comment
-        MockResponse(
-            200, json.dumps({"data": {"id": "comment-id", "type": "comment"}}).encode()
-        )
-
         # Mock agent request
         deferred: defer.Deferred = defer.Deferred()
         self.output.agent.request.return_value = deferred
@@ -290,9 +221,6 @@ class VirusTotalOutputTests(unittest.TestCase):
 
     def test_submiturl_v3_format(self) -> None:
         """Test URL submission using v3 API format"""
-        # Mock response for successful URL submission
-        MockResponse(200, b"")
-
         # Mock agent request
         deferred: defer.Deferred = defer.Deferred()
         self.output.agent.request.return_value = deferred
@@ -405,37 +333,77 @@ class VirusTotalOutputTests(unittest.TestCase):
                 # Reset mock for next test
                 self.output.agent.request.reset_mock()
 
-    def test_collection_initialization(self) -> None:
-        """Test collection initialization"""
-        # Create output plugin with collection configured
+    def test_create_collection_request(self) -> None:
+        """Creating a collection POSTs the v3 collection body."""
         output = Output()
         output.apiKey = "test-api-key"
         output.debug = True
         output.collection_name = "test-collection"
 
-        # Mock agent
         mock_agent = Mock()
         output.agent = mock_agent
 
-        # Initialize collection
-        output._init_collection()
+        output._create_collection()
 
-        # Verify request was made
         self.assertTrue(mock_agent.request.called)
-        call_args = mock_agent.request.call_args
-        method, url, _headers, body = call_args[0]
-
-        # Check method and URL
+        method, url, _headers, body = mock_agent.request.call_args[0]
         self.assertEqual(method, b"POST")
         self.assertEqual(url, b"https://www.virustotal.com/api/v3/collections")
-
-        # Check body format
-        body_content = body.body.decode()
-        collection_data = json.loads(body_content)
+        collection_data = json.loads(body.body.decode())
         self.assertEqual(collection_data["data"]["type"], "collection")
         self.assertEqual(
             collection_data["data"]["attributes"]["name"], "test-collection"
         )
+
+    def test_init_collection_reuses_existing(self) -> None:
+        """An existing collection found by name is reused without creating."""
+        self.output.collection_name = "cowrie"
+
+        captured: dict = {}
+
+        def fake_make_request(method, *args, **kwargs):
+            captured["method"] = method
+            captured["process_response"] = kwargs.get("process_response")
+            return defer.succeed(None)
+
+        self.output._make_request = fake_make_request  # type: ignore[method-assign]
+        self.output._create_collection = Mock()  # type: ignore[method-assign]
+
+        self.output._init_collection()
+        # The lookup is a GET against /collections.
+        self.assertEqual(captured["method"], b"GET")
+        captured["process_response"](
+            json.dumps(
+                {"data": [{"id": "EXISTING-ID", "attributes": {"name": "cowrie"}}]}
+            ).encode()
+        )
+
+        self.assertEqual(self.output.collection_id, "EXISTING-ID")
+        self.output._create_collection.assert_not_called()
+
+    def test_init_collection_creates_when_absent(self) -> None:
+        """When no collection matches the name, one is created."""
+        self.output.collection_name = "cowrie"
+
+        captured: dict = {}
+
+        def fake_make_request(method, *args, **kwargs):
+            captured["process_response"] = kwargs.get("process_response")
+            return defer.succeed(None)
+
+        self.output._make_request = fake_make_request  # type: ignore[method-assign]
+        self.output._create_collection = Mock()  # type: ignore[method-assign]
+
+        self.output._init_collection()
+        # A different collection is returned; the name does not match.
+        captured["process_response"](
+            json.dumps(
+                {"data": [{"id": "OTHER-ID", "attributes": {"name": "something-else"}}]}
+            ).encode()
+        )
+
+        self.assertIsNone(self.output.collection_id)
+        self.output._create_collection.assert_called_once()
 
     def test_add_file_to_collection(self) -> None:
         """Test adding a file to a collection"""

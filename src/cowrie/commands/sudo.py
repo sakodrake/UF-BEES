@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import getopt
@@ -90,7 +94,7 @@ class Command_sudo(HoneyPotCommand):
         parsed_arguments = []
         for count in range(0, len(self.args)):
             class_found = self.protocol.getCommand(
-                self.args[count], self.environ["PATH"].split(":")
+                self.args[count], self.environ.get("PATH", "").split(":"), self.cwd
             )
             if class_found:
                 start_value = count
@@ -118,13 +122,21 @@ class Command_sudo(HoneyPotCommand):
 
         if len(parsed_arguments) > 0:
             cmd = parsed_arguments[0]
-            cmdclass = self.protocol.getCommand(cmd, self.environ["PATH"].split(":"))
+            cmdclass = self.protocol.getCommand(
+                cmd, self.environ.get("PATH", "").split(":"), self.cwd
+            )
 
             if cmdclass:
                 command = PipeProtocol(
-                    self.protocol, cmdclass, parsed_arguments[1:], None, None
+                    self.protocol,
+                    cmdclass,
+                    parsed_arguments[1:],
+                    None,
+                    None,
+                    cwd=self.cwd,
+                    user=self.user,
                 )
-                self.protocol.pp.insert_command(command)
+                self.pp.insert_command(command)
                 # this needs to go here so it doesn't write it out....
                 if self.input_data:
                     self.writeBytes(self.input_data)

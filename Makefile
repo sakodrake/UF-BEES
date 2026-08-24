@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2019-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 # This `Makefile` is intended for Cowrie developers.
 
 # Set default docker binary to docker in path if not specified.
@@ -36,6 +40,10 @@ clean: ## Clean temporary files
 	rm -rf _trial_temp build dist src/_trial_temp src/Cowrie.egg-info
 	make -C docs clean
 
+.PHONY: audit
+audit: ## Run dependency security audit
+	tox -e audit
+
 .PHONY: pre-commit
 pre-commit: ## Run pre-commit checks
 	pre-commit run --all-files
@@ -71,6 +79,10 @@ TAG=$(shell git rev-parse --short=8 HEAD)
 
 export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_COWRIE := $(shell python -m setuptools_scm --force-write-version-files)
 
+
+.PHONY: build-fs-pickle
+build-fs-pickle: ## Rebuild src/cowrie/data/fs.pickle from a Debian container
+	DOCKER=$(DOCKER) bin/build-fs-pickle.sh
 
 .PHONY: docker-build
 docker-build: docker/Dockerfile ## Build Docker image

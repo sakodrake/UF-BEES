@@ -1,30 +1,6 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -33,7 +9,7 @@ import time
 from typing import Any
 
 from slack import WebClient
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -44,21 +20,25 @@ class Output(cowrie.core.output.Output):
     slack output
     """
 
+    _log = Logger()
+
     def start(self) -> None:
         self.name = "slack output engine"
         self.slack_channel = CowrieConfig.get("output_slack", "channel")
         self.slack_token = CowrieConfig.get("output_slack", "token")
+        self.sc = WebClient(self.slack_token)
         self.simplified = CowrieConfig.getboolean(
             "output_slack", "simplified", fallback=False
         )
-        self.show_timestamp = not CowrieConfig.getboolean(
+        self.show_timestamp = CowrieConfig.getboolean(
             "output_slack", "timestamp", fallback=True
         )
         self.verbose = CowrieConfig.getboolean("output_slack", "verbose", fallback=True)
         if not self.show_timestamp and not self.simplified:
-            log.msg(
-                f"{self.name}: setting 'timestamp=false' is only effective when "
-                + "'simplified' mode is enabled, this will be ignored."
+            self._log.warn(
+                "{name}: setting 'timestamp=false' is only effective when "
+                "'simplified' mode is enabled, this will be ignored.",
+                name=self.name,
             )
 
     def stop(self) -> None:
@@ -109,10 +89,6 @@ class Output(cowrie.core.output.Output):
 
         # Dictionary of event handlers
         event_handlers = {
-            "cowrie.client.connect": lambda: (
-                f":large_green_circle: *CONNECT* :large_green_circle: New {event.get('protocol', '').upper()} "
-                + f"connection `{event.get('src_ip', 'unknown')}`, port: `{event.get('src_port', 'unknown')}`"
-            ),
             "cowrie.session.connect": lambda: (
                 f":large_green_circle: *CONNECT* :large_green_circle: New {event.get('protocol', '').upper()} "
                 + f"connection `{event.get('src_ip', 'unknown')}`, port: `{event.get('src_port', 'unknown')}`"
@@ -138,7 +114,7 @@ class Output(cowrie.core.output.Output):
             ),
             "cowrie.session.closed": lambda: (
                 ":red_circle: *LOGOUT* :red_circle: Session closed - "
-                + f"Total duration: `{event.get('duration', 'unknown')}` seconds"
+                + f"Total duration: `{event.get('duration_ms', 'unknown')}` milliseconds"
             ),
             "cowrie.command.input": lambda: _format_command(event.get("input", "")),
             "cowrie.session.file_download": lambda: _format_download(event),
@@ -158,11 +134,8 @@ class Output(cowrie.core.output.Output):
                 f"*CMD* : :arrow_right_hook: *Failed* `{event.get('input', 'unknown')}` > "
                 + f"`{event.get('message', 'unknown')}`"
             ),
-            "cowrie.session.file_download_failed": lambda: (
+            "cowrie.session.file_download.failed": lambda: (
                 f"*FILE* : :x: *Download Failed* `{event.get('message', 'unknown')}`"
-            ),
-            "cowrie.session.file_upload_failed": lambda: (
-                f"*FILE* : :x: *Upload Failed* `{event.get('message', 'unknown')}`"
             ),
         }
 
@@ -183,6 +156,7 @@ class Output(cowrie.core.output.Output):
             "type",
             "fingerprint",
             "duration",
+            "duration_ms",
             "outfile",
             "shasum",
             "src_ip",
@@ -203,16 +177,13 @@ class Output(cowrie.core.output.Output):
             if i.startswith("log_"):
                 del event[i]
 
-        self.sc = WebClient(self.slack_token)
-
         # Check for verbose events to skip in case of not verbose mode
         verbose_events = (
             "cowrie.client.kex",
-            "cowrie.client.connect",
             "cowrie.client.size",
             "cowrie.client.var",
             "cowrie.log.closed",
-            "cowrie.log.opened",
+            "cowrie.log.open",
             "cowrie.session.params",
         )
         eventid = event.get("eventid", "")

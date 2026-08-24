@@ -1,13 +1,14 @@
-# Copyright (c) 2020 Peter Sufliarsky <sufliarskyp@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2020 Peter Šufliarsky
+# SPDX-FileCopyrightText: 2020 Peter Sufliarsky <sufliarskyp@gmail.com>
+# SPDX-FileCopyrightText: 2021-2024 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 uniq command
 """
 
 from __future__ import annotations
-
-from twisted.python import log
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -66,15 +67,15 @@ class Command_uniq(HoneyPotCommand):
             self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="uniq",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
         self.grep_input(line.encode())
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
     def grep_input(self, line: bytes) -> None:

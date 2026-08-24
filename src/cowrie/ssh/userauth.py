@@ -1,11 +1,11 @@
-# Copyright (c) 2009-2014 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 from __future__ import annotations
 
-import configparser
-import importlib.resources
 import struct
 from typing import Any
 
@@ -15,12 +15,26 @@ from twisted.conch.ssh import userauth
 from twisted.conch.ssh.common import NS, getNS
 from twisted.conch.ssh.transport import DISCONNECT_PROTOCOL_ERROR
 from twisted.internet import defer
-from twisted.python import log
+from twisted.logger import Logger
 from twisted.python.failure import Failure
 
-from cowrie import data
 from cowrie.core import credentials
 from cowrie.core.config import CowrieConfig
+from cowrie.shell.honeyfs import read_honeyfs_bytes
+
+
+class EventsAttachingPortal:
+    """Attaches a session's EventLog to credentials before delegating to the
+    real portal, for the credential objects Twisted builds internally
+    (public key auth) that cannot carry the emitter from construction."""
+
+    def __init__(self, portal: Any, events: Any) -> None:
+        self.portal = portal
+        self.events = events
+
+    def login(self, credentials: Any, mind: Any, *interfaces: Any) -> Any:
+        credentials.events = self.events
+        return self.portal.login(credentials, mind, *interfaces)
 
 
 class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
@@ -32,6 +46,7 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
     * IP based authentication
     """
 
+    _log = Logger()
     bannerSent: bool = False
     user: bytes
     _pamDeferred: defer.Deferred | None
@@ -60,18 +75,11 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
         self.bannerSent = True
 
         try:
-            with open(
-                f"{CowrieConfig.get('honeypot', 'contents_path')}/etc/issue.net",
-                encoding="ascii",
-            ) as f:
-                banner = f.read()
-        except configparser.Error as e:
-            log.msg(f"Loading default /etc/issue.net file: {e!r}")
-            resources_path = importlib.resources.files(data)
-            banner_path = resources_path.joinpath("honeyfs", "etc", "issue.net")
-            banner = banner_path.read_text(encoding="utf-8")
-        except OSError as e:
-            log.err(e, "ERROR: Failed to load /etc/issue.net")
+            banner = read_honeyfs_bytes("etc/issue.net").decode(
+                "utf-8", errors="replace"
+            )
+        except FileNotFoundError:
+            self._log.failure("ERROR: Failed to load /etc/issue.net")
             return
 
         if not banner or not banner.strip():
@@ -99,12 +107,28 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
     #         return defer.fail(error.ConchError("Incorrect signature"))
     #     return userauth.SSHUserAuthServer.auth_publickey(self, packet)
 
+    def auth_publickey(self, packet: bytes) -> Any:
+        """
+        Overridden to attach the session's EventLog to the credential that
+        the base implementation constructs, so the public-key checker can
+        dispatch attributed events.
+        """
+        original = self.portal
+        self.portal = EventsAttachingPortal(
+            original,
+            self.transport.events,  # type: ignore[union-attr]
+        )
+        try:
+            return userauth.SSHUserAuthServer.auth_publickey(self, packet)
+        finally:
+            self.portal = original
+
     def auth_none(self, _packet: bytes) -> Any:
         """
         Allow every login
         """
-        c = credentials.Username(self.user)
         srcIp: str = self.transport.transport.getPeer().host  # type: ignore
+        c = credentials.Username(self.user, events=self.transport.events)  # type: ignore[union-attr]
         return self.portal.login(c, srcIp, IConchUser)
 
     def auth_password(self, packet: bytes) -> Any:
@@ -115,7 +139,12 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
         if password == b"\x00":
             return None  # sshamble
         srcIp = self.transport.transport.getPeer().host  # type: ignore
-        c = credentials.UsernamePasswordIP(self.user, password, srcIp)
+        c = credentials.UsernamePasswordIP(
+            self.user,
+            password,
+            srcIp,
+            events=self.transport.events,  # type: ignore[union-attr]
+        )
         return self.portal.login(c, srcIp, IConchUser).addErrback(self._ebPassword)
 
     def auth_keyboard_interactive(self, _packet: bytes) -> Any:
@@ -135,7 +164,10 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
             return defer.fail(error.IgnoreAuthentication())
         src_ip = self.transport.transport.getPeer().host  # type: ignore
         c = credentials.PluggableAuthenticationModulesIP(
-            self.user, self._pamConv, src_ip
+            self.user,
+            self._pamConv,
+            src_ip,
+            events=self.transport.events,  # type: ignore[union-attr]
         )
         return self.portal.login(c, src_ip, IConchUser).addErrback(self._ebPassword)
 
@@ -179,7 +211,17 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
             ...
             string response n
         """
-        assert self._pamDeferred is not None
+        if self._pamDeferred is None:
+            # A client can send this at any point during userauth. With no
+            # INFO_REQUEST outstanding it is either unsolicited or a repeat of
+            # a response already consumed, so refuse it the way the other
+            # sequence violations here do.
+            self.transport.sendDisconnect(  # type: ignore
+                DISCONNECT_PROTOCOL_ERROR,
+                "unexpected keyboard interactive response",
+            )
+            return
+
         d: defer.Deferred = self._pamDeferred
         self._pamDeferred = None
         resp: list
@@ -192,7 +234,11 @@ class HoneyPotSSHUserAuthServer(userauth.SSHUserAuthServer):
                 response, packet = getNS(packet)
                 resp.append((response, 0))
             if packet:
-                log.msg(f"PAM Response: {len(packet):d} extra bytes: {packet!r}")
+                self._log.info(
+                    "PAM Response: {extra:d} extra bytes: {packet!r}",
+                    extra=len(packet),
+                    packet=packet,
+                )
         except Exception as e:
             d.errback(Failure(e))
         else:

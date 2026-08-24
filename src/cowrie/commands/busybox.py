@@ -1,6 +1,10 @@
-from __future__ import annotations
+# SPDX-FileCopyrightText: 2015 mak <mak@lokahost.pl>
+# SPDX-FileCopyrightText: 1998-2011 Erik Andersen, Rob Landley, Denys Vlasenko
+# SPDX-FileCopyrightText: 2015-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
-from twisted.python import log
+from __future__ import annotations
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.pipe import PipeProtocol
@@ -72,29 +76,37 @@ class Command_busybox(HoneyPotCommand):
 
         line = " ".join(self.args)
         cmd = self.args[0]
-        cmdclass = self.protocol.getCommand(cmd, self.environ["PATH"].split(":"))
+        cmdclass = self.protocol.getCommand(
+            cmd, self.environ.get("PATH", "").split(":"), self.cwd
+        )
         if cmdclass:
             # log found command
-            log.msg(
-                eventid="cowrie.command.success",
+            self.protocol.events.dispatch(
+                "cowrie.command.success",
+                "Command found: %(input)s",
                 input=line,
-                format="Command found: %(input)s",
             )
 
-            # prepare command arguments
+            # prepare command arguments, passing through the redirections the
+            # shell parsed for the outer busybox command so the dispatched
+            # applet's output is redirected the same as a direct invocation
             pp = PipeProtocol(
                 self.protocol,
                 cmdclass,
-                self.protocol.pp.cmdargs[1:],
+                self.pp.cmdargs[1:],
                 self.input_data,
                 None,
+                redirect=self.pp.redirect,
+                redirections=self.pp.redirections,
+                cwd=self.cwd,
+                user=self.user,
             )
 
             # insert the command as we do when chaining commands with pipes
-            self.protocol.pp.insert_command(pp)
+            self.pp.insert_command(pp)
 
             # invoke inserted command
-            self.protocol.pp.outConnectionLost()
+            self.pp.outConnectionLost()
 
             # Place this here so it doesn't write out only if last statement
             if self.input_data:

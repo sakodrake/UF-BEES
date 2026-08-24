@@ -1,4 +1,7 @@
-# Copyright (c) 2025 Filippo Lauria <filippo.lauria@iit.cnr.it>
+# SPDX-FileCopyrightText: 2025 Filippo Lauria <filippo.lauria@iit.cnr.it>
+# SPDX-FileCopyrightText: 2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 import time
 from collections import defaultdict
@@ -50,6 +53,10 @@ class RateLimiter:
 
         if not self.enabled:
             return True
+
+        # Hostnames (and IPv6 hex) are case-insensitive, so normalise the key;
+        # otherwise case variants of one host each get their own allowance.
+        key = key.lower()
 
         current_time = time.time()
 

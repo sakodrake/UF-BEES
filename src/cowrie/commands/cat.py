@@ -1,5 +1,7 @@
-# Copyright (c) 2010 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2010 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2018-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 cat command
@@ -9,8 +11,7 @@ cat command
 from __future__ import annotations
 
 import getopt
-
-from twisted.python import log
+import os
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.fs import FileNotFound
@@ -52,7 +53,7 @@ class Command_cat(HoneyPotCommand):
                     self.output(self.input_data)
                     continue
 
-                pname = self.fs.resolve_path(arg, self.protocol.cwd)
+                pname = self.fs.resolve_path(arg, self.cwd)
 
                 if self.fs.isdir(pname):
                     self.errorWrite(f"cat: {arg}: Is a directory\n")
@@ -88,19 +89,37 @@ class Command_cat(HoneyPotCommand):
         """
         This function logs standard input from the user send to cat
         """
-        log.msg(
-            eventid="cowrie.session.input",
+        self.protocol.events.dispatch(
+            "cowrie.session.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="cat",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
         self.output(line.encode("utf-8"))
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         """
         ctrl-d is end-of-file, time to terminate
         """
+        terminal = self.protocol.terminal
+        if (
+            self.input_data is None
+            and getattr(terminal, "stdinlogOpen", False)
+            and getattr(terminal, "stdinlogFile", "")
+            and os.path.exists(terminal.stdinlogFile)
+        ):
+            # Live exec-channel stdin (e.g. `cat > file`): the bytes were
+            # streamed to the stdin log rather than buffered as input_data, so
+            # start() left us parked for EOF. Emit them now, verbatim unless
+            # line numbering was requested, so a redirect target is not left
+            # empty.
+            with open(terminal.stdinlogFile, "rb") as f:
+                data = f.read()
+            if self.number:
+                self.output(data)
+            else:
+                self.writeBytes(data)
         self.exit()
 
     def help(self) -> None:

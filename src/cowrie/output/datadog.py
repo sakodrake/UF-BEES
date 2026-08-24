@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2022 udgover <frederic.baguelin@gmail.com>
+# SPDX-FileCopyrightText: 2022-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 """
 Simple Datadog HTTP logger.
 """
@@ -9,7 +14,7 @@ import platform
 from io import BytesIO
 
 from twisted.internet import reactor
-from twisted.python import log
+from twisted.logger import Logger
 from twisted.web import client, http_headers
 from twisted.web.client import FileBodyProducer
 
@@ -18,13 +23,15 @@ from cowrie.core.config import CowrieConfig
 
 
 class Output(cowrie.core.output.Output):
+    _log = Logger()
+
     def start(self) -> None:
         self.url = CowrieConfig.get("output_datadog", "url").encode("utf8")
         self.api_key = CowrieConfig.get(
             "output_datadog", "api_key", fallback=""
         ).encode("utf8")
         if len(self.api_key) == 0:
-            log.msg("Datadog output module: API key is not defined.")
+            self._log.info("Datadog output module: API key is not defined.")
         self.ddsource = CowrieConfig.get(
             "output_datadog", "ddsource", fallback="cowrie"
         )
@@ -64,4 +71,12 @@ class Output(cowrie.core.output.Output):
         }
         headers = http_headers.Headers(base_headers)
         body = FileBodyProducer(BytesIO(json.dumps(entry).encode("utf8")))
-        self.agent.request(b"POST", self.url, headers, body)
+        d = self.agent.request(b"POST", self.url, headers, body)
+        d.addErrback(self._request_failed)
+
+    def _request_failed(self, failure):
+        # Best-effort telemetry: log a failed request (timeout, DNS, reset,
+        # ...) rather than leave it as an unhandled Deferred error.
+        self._log.info(
+            "Datadog request failed: {error}", error=failure.getErrorMessage()
+        )

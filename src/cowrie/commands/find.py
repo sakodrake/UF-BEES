@@ -1,6 +1,7 @@
-# Copyright (c) 2010 Michel Oosterhof <michel@oosterhof.net>
-# See the COPYRIGHT file for more information
-# Contributor: Onder7994
+# SPDX-FileCopyrightText: 2025 Onder7994
+# SPDX-FileCopyrightText: 2025-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 find command
@@ -9,7 +10,7 @@ find command
 from __future__ import annotations
 
 import fnmatch
-import os
+import posixpath
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -26,7 +27,7 @@ class Command_find(HoneyPotCommand):
         self.name_pattern = None
         self.type_filter = None
 
-        self.start_path = self.protocol.cwd
+        self.start_path = self.cwd
 
         idx = 0
         while idx < len(self.args):
@@ -67,8 +68,8 @@ class Command_find(HoneyPotCommand):
                     self.exit()
                     return
 
-            elif not arg.startswith("-") and self.start_path == self.protocol.cwd:
-                self.start_path = self.fs.resolve_path(arg, self.protocol.cwd)
+            elif not arg.startswith("-") and self.start_path == self.cwd:
+                self.start_path = self.fs.resolve_path(arg, self.cwd)
 
             else:
                 self.errorWrite(f"find: unknown argument '{arg}'\n")
@@ -81,7 +82,7 @@ class Command_find(HoneyPotCommand):
         self.exit()
 
     def find_recursive(self, path: str, depth: int) -> None:
-        if self.maxdepth is not None and depth > self.maxdepth:
+        if depth > self.maxdepth:
             return
         try:
             if not self.fs.exists(path):
@@ -93,13 +94,13 @@ class Command_find(HoneyPotCommand):
                 for entry in self.fs.listdir(path):
                     if entry in (".", ".."):
                         continue
-                    full_path = os.path.join(path, entry)
+                    full_path = posixpath.join(path, entry)
                     self.find_recursive(full_path, depth + 1)
         except Exception as e:
             self.errorWrite(f"find: error accessing {path}: {e}\n")
 
     def _match(self, path: str) -> bool:
-        basename = os.path.basename(path)
+        basename = posixpath.basename(path)
 
         if self.name_pattern and not fnmatch.fnmatch(basename, self.name_pattern):
             return False

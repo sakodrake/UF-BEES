@@ -1,5 +1,7 @@
-# Copyright (c) 2009-2014 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2014-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 This module contains ...
@@ -7,7 +9,12 @@ This module contains ...
 
 from __future__ import annotations
 
+import errno
+import functools
 import os
+import posixpath
+from collections.abc import Callable
+from typing import Any, TypeVar, cast
 
 import twisted.conch.ls
 from twisted.conch.interfaces import ISFTPFile, ISFTPServer
@@ -20,13 +27,41 @@ from twisted.conch.ssh.filetransfer import (
     FXF_TRUNC,
     FXF_WRITE,
 )
-from twisted.python import log
+from twisted.logger import Logger
 from twisted.python.compat import nativeString
 from zope.interface import implementer
 
 import twisted
 from cowrie.core.config import CowrieConfig
 from cowrie.shell import pwd
+from cowrie.shell.fs import FileNotFound, PermissionDenied
+
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def translate_fs_errors(method: F) -> F:
+    """Translate the emulated filesystem's exceptions into ``OSError`` at the
+    SFTP boundary.
+
+    ``HoneyPotFilesystem`` raises ``FileNotFound`` / ``PermissionDenied`` for
+    some operations (a missing parent directory, a write under ``/proc`` ...).
+    The conch SFTP server only understands ``OSError`` / ``SFTPError``; a bare
+    cowrie exception reaches it as an unexpected error, logged as a critical
+    traceback and reported to the client as a generic failure. Mapping them to
+    the matching errno lets conch return ``FX_NO_SUCH_FILE`` /
+    ``FX_PERMISSION_DENIED`` instead.
+    """
+
+    @functools.wraps(method)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return method(*args, **kwargs)
+        except FileNotFound:
+            raise OSError(errno.ENOENT, os.strerror(errno.ENOENT)) from None
+        except PermissionDenied:
+            raise OSError(errno.EACCES, os.strerror(errno.EACCES)) from None
+
+    return cast("F", wrapper)
 
 
 @implementer(ISFTPFile)
@@ -43,7 +78,13 @@ class CowrieSFTPFile:
     def __init__(self, sftpserver, filename, flags, attrs):
         self.sftpserver = sftpserver
         self.filename = filename
+        # Bytes that arrived, which is what the transfer quota is about.
         self.bytesReceived: int = 0
+        # The file's size, which is not the same number: SFTP writes are
+        # offset-addressed, so a client can resend a chunk it already sent
+        # (making the sum too large) or seek past the end (too small). The
+        # size is the highest offset ever written to.
+        self.size: int = 0
 
         openFlags = 0
         if flags & FXF_READ == FXF_READ and flags & FXF_WRITE == 0:
@@ -75,8 +116,8 @@ class CowrieSFTPFile:
             self.contents = self.sftpserver.fs.file_contents(self.filename)
 
     def close(self):
-        if self.bytesReceived > 0:
-            self.sftpserver.fs.update_size(self.filename, self.bytesReceived)
+        if self.size > 0:
+            self.sftpserver.fs.update_size(self.filename, self.size)
         return self.sftpserver.fs.close(self.fd)
 
     def readChunk(self, offset: int, length: int) -> bytes:
@@ -84,6 +125,7 @@ class CowrieSFTPFile:
 
     def writeChunk(self, offset: int, data: bytes) -> None:
         self.bytesReceived += len(data)
+        self.size = max(self.size, offset + len(data))
         if self.bytesReceivedLimit and self.bytesReceived > self.bytesReceivedLimit:
             raise filetransfer.SFTPError(filetransfer.FX_FAILURE, "Quota exceeded")
         self.sftpserver.fs.lseek(self.fd, offset, os.SEEK_SET)
@@ -132,8 +174,10 @@ class CowrieSFTPDirectory:
             attrs = self.server._getAttrs(s)
             return (f, longname, attrs)
         else:
-            s = self.server.fs.lstat(os.path.join(self.dir, f))
-            s2 = self.server.fs.lstat(os.path.join(self.dir, f))
+            # Virtual (emulated-Linux) paths always join with "/", never the
+            # host separator — os.path.join would use "\" on Windows.
+            s = self.server.fs.lstat(posixpath.join(self.dir, f))
+            s2 = self.server.fs.lstat(posixpath.join(self.dir, f))
             s2.st_uid = pwd.Passwd().getpwuid(s.st_uid)["pw_name"]
             s2.st_gid = pwd.Group().getgrgid(s.st_gid)["gr_name"]
             longname = twisted.conch.ls.lsLine(f, s2)
@@ -146,14 +190,20 @@ class CowrieSFTPDirectory:
 
 @implementer(ISFTPServer)
 class SFTPServerForCowrieUser:
+    _log = Logger()
+
     def __init__(self, avatar):
         self.avatar = avatar
         self.avatar.server.initFileSystem(self.avatar.home)
         self.fs = self.avatar.server.fs
+        # Bind the session's event emitter so SFTP uploads are attributed.
+        self.fs.events = self.avatar.conn.transport.events
 
     def _absPath(self, path):
         home = self.avatar.home
-        return os.path.abspath(os.path.join(nativeString(home), nativeString(path)))
+        # Emulated-Linux path: normalise with posix semantics so the host OS
+        # separator (e.g. "\" on Windows) never leaks into a virtual path.
+        return posixpath.abspath(posixpath.join(nativeString(home), nativeString(path)))
 
     def _setAttrs(self, path, attrs):
         if "uid" in attrs and "gid" in attrs:
@@ -176,34 +226,43 @@ class SFTPServerForCowrieUser:
     def gotVersion(self, otherVersion, extData):
         return {}
 
+    @translate_fs_errors
     def openFile(self, filename, flags, attrs):
-        log.msg(f"SFTP openFile: {filename}")
+        self._log.info("SFTP openFile: {filename}", filename=filename)
         return CowrieSFTPFile(self, self._absPath(filename), flags, attrs)
 
+    @translate_fs_errors
     def removeFile(self, filename):
-        log.msg(f"SFTP removeFile: {filename}")
+        self._log.info("SFTP removeFile: {filename}", filename=filename)
         return self.fs.remove(self._absPath(filename))
 
+    @translate_fs_errors
     def renameFile(self, oldpath, newpath):
-        log.msg(f"SFTP renameFile: {oldpath} {newpath}")
+        self._log.info(
+            "SFTP renameFile: {oldpath} {newpath}", oldpath=oldpath, newpath=newpath
+        )
         return self.fs.rename(self._absPath(oldpath), self._absPath(newpath))
 
+    @translate_fs_errors
     def makeDirectory(self, path, attrs):
-        log.msg(f"SFTP makeDirectory: {path}")
+        self._log.info("SFTP makeDirectory: {path}", path=path)
         path = self._absPath(path)
         self.fs.mkdir2(path)
         self._setAttrs(path, attrs)
 
+    @translate_fs_errors
     def removeDirectory(self, path):
-        log.msg(f"SFTP removeDirectory: {path}")
+        self._log.info("SFTP removeDirectory: {path}", path=path)
         return self.fs.rmdir(self._absPath(path))
 
+    @translate_fs_errors
     def openDirectory(self, path):
-        log.msg(f"SFTP OpenDirectory: {path}")
+        self._log.info("SFTP OpenDirectory: {path}", path=path)
         return CowrieSFTPDirectory(self, self._absPath(path))
 
+    @translate_fs_errors
     def getAttrs(self, path, followLinks):
-        log.msg(f"SFTP getAttrs: {path}")
+        self._log.info("SFTP getAttrs: {path}", path=path)
         path = self._absPath(path)
         if followLinks:
             s = self.fs.stat(path)
@@ -211,18 +270,24 @@ class SFTPServerForCowrieUser:
             s = self.fs.lstat(path)
         return self._getAttrs(s)
 
+    @translate_fs_errors
     def setAttrs(self, path, attrs):
-        log.msg(f"SFTP setAttrs: {path}")
+        self._log.info("SFTP setAttrs: {path}", path=path)
         path = self._absPath(path)
         return self._setAttrs(path, attrs)
 
+    @translate_fs_errors
     def readLink(self, path):
-        log.msg(f"SFTP readLink: {path}")
+        self._log.info("SFTP readLink: {path}", path=path)
         path = self._absPath(path)
         return self.fs.readlink(path)
 
     def makeLink(self, linkPath, targetPath):
-        log.msg(f"SFTP makeLink: {linkPath} {targetPath}")
+        self._log.info(
+            "SFTP makeLink: {linkPath} {targetPath}",
+            linkPath=linkPath,
+            targetPath=targetPath,
+        )
         linkPath = self._absPath(linkPath)
         targetPath = self._absPath(targetPath)
         return self.fs.symlink(targetPath, linkPath)

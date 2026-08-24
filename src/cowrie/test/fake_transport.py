@@ -1,5 +1,7 @@
-# Copyright (c) 2016 Dave Germiquet
-# See LICENSE for details.
+# SPDX-FileCopyrightText: 2016 Dave Germiquet
+# SPDX-FileCopyrightText: 2016-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -7,6 +9,9 @@ from typing import TYPE_CHECKING, ClassVar
 
 from twisted.conch.insults import insults
 from twisted.test import proto_helpers
+
+from cowrie.core.events import EventDispatcher, EventLog
+from cowrie.test.eventcapture import CaptureSink
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -85,6 +90,19 @@ class FakeTransport(proto_helpers.StringTransport):
 
     modes: ClassVar[dict[str, Callable]] = {}
 
+    def __init__(self, hostAddress=None, peerAddress=None):
+        # The event pipeline a protocol picks up in connectionMade; events
+        # dispatched by commands land in dispatchedEvents for assertions.
+        sink = CaptureSink()
+        self.dispatchedEvents = sink.events
+        self.events = EventLog(
+            EventDispatcher([sink], logmsg=lambda *args, **kwargs: None),
+            session="test-suite",
+            protocol="test",
+            src_ip="1.1.1.1",
+        )
+        super().__init__(hostAddress, peerAddress)
+
     # '\x01':     self.handle_HOME,	# CTRL-A
     # '\x02':     self.handle_LEFT,	# CTRL-B
     # '\x03':     self.handle_CTRL_C,	# CTRL-C
@@ -155,12 +173,14 @@ class FakeTransport(proto_helpers.StringTransport):
 
     def clear(self):
         proto_helpers.StringTransport.clear(self)
+        self.dispatchedEvents.clear()
         self.transport = Container()
         self.transport.session = Container()
         self.transport.session.conn = Container()
         self.transport.session.conn.transport = Container()
         self.transport.session.conn.transport.transport = Container()
         self.transport.session.conn.transport.transport.sessionno = 1
+        self.transport.session.conn.transport.events = self.events
         self.transport.session.conn.transport.factory = Container()
         self.transport.session.conn.transport.factory.sessions = {}
         self.transport.session.conn.transport.factory.starttime = 0
@@ -169,7 +189,7 @@ class FakeTransport(proto_helpers.StringTransport):
         self.eraseDisplay()
 
     def eraseDisplay(self):
-        self.lines = [self._emptyLine(self.width) for i in range(self.height)]
+        self.lines = [self._emptyLine(self.width) for _ in range(self.height)]
 
     def _currentFormattingState(self):
         return True
@@ -178,4 +198,4 @@ class FakeTransport(proto_helpers.StringTransport):
         return True
 
     def _emptyLine(self, width):
-        return [(self.void, self._currentFormattingState()) for i in range(width)]
+        return [(self.void, self._currentFormattingState()) for _ in range(width)]

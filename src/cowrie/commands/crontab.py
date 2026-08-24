@@ -1,6 +1,8 @@
-# Copyright (c) 2019 Nuno Novais <nuno@noais.me>
-# All rights reserved.
-# All rights given to Cowrie project
+# SPDX-FileCopyrightText: 2019 NunoNovais <nuno@novais.me>
+# SPDX-FileCopyrightText: 2019 Nuno Novais <nuno@noais.me>
+# SPDX-FileCopyrightText: 2020-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 This module contains the crontab commnad
@@ -9,8 +11,6 @@ This module contains the crontab commnad
 from __future__ import annotations
 
 import getopt
-
-from twisted.python import log
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -63,14 +63,14 @@ class Command_crontab(HoneyPotCommand):
             pass
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="crontab",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 

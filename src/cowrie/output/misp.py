@@ -1,19 +1,38 @@
+# SPDX-FileCopyrightText: 2020 Matthias
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pymisp import MISPAttribute, MISPEvent, MISPObject, MISPSighting
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
 
-try:
-    from pymisp import ExpandedPyMISP as PyMISP
-except ImportError:
-    from pymisp import PyMISP as PyMISP
+if TYPE_CHECKING:
+    from pymisp import PyMISP
+else:
+    try:
+        from pymisp import ExpandedPyMISP as PyMISP
+    except ImportError:
+        from pymisp import PyMISP
+
+
+def file_md5(path: str) -> str:
+    """Return the MD5 hex digest of the file at ``path``.
+
+    MISP stores ``malware-sample`` attribute values as ``filename|md5``, so
+    MD5 is the hash used to correlate samples and register sightings.
+    """
+    with open(path, "rb") as handle:
+        return hashlib.md5(handle.read(), usedforsecurity=False).hexdigest()
 
 
 class Output(cowrie.core.output.Output):
@@ -27,6 +46,8 @@ class Output(cowrie.core.output.Output):
 
     Events are now consolidated to create one comprehensive event per session
     """
+
+    _log = Logger()
 
     def start(self) -> None:
         """
@@ -98,7 +119,7 @@ class Output(cowrie.core.output.Output):
                     "client_details": {},
                     "event_created": False,
                     "end_time": None,
-                    "duration": None,
+                    "duration_ms": None,
                 }
 
                 # Track client details for SSH sessions
@@ -126,16 +147,16 @@ class Output(cowrie.core.output.Output):
                 }
                 self.session_tracking[session_id]["downloads"].append(download_info)
 
-                # Option 1: Create immediate malware events as in the old script
-                # This gives instant malware upload without waiting for session to end
-                file_sha_attrib = self.find_attribute(
-                    "malware-sample", f"*|{event['shasum']}"
-                )
-                if file_sha_attrib:
-                    if self.debug:
-                        log.msg("MISP: File known, add sighting")
-                    self.add_sighting(event, file_sha_attrib)
-                # Don't create immediate event - let the session event handle it
+                # malware-sample values are filename|md5, so look up by MD5.
+                outfile = event.get("outfile")
+                if outfile and os.path.exists(outfile):
+                    malware_attrib = self.find_attribute(
+                        "malware-sample", file_md5(outfile)
+                    )
+                    if malware_attrib:
+                        if self.debug:
+                            self._log.info("MISP: File known, add sighting")
+                        self.add_sighting(event, malware_attrib)
 
             elif event["eventid"] == "cowrie.session.file_upload":
                 # Track file uploads in session data
@@ -150,7 +171,7 @@ class Output(cowrie.core.output.Output):
                 file_sha_attrib = self.find_attribute("sha256", event["shasum"])
                 if file_sha_attrib:
                     if self.debug:
-                        log.msg("MISP: File known, add sighting")
+                        self._log.info("MISP: File known, add sighting")
                     self.add_sighting(event, file_sha_attrib)
 
             # Handle login attempts (both failed and successful)
@@ -209,15 +230,20 @@ class Output(cowrie.core.output.Output):
                         cmd_details
                     )
                     if self.debug:
-                        log.msg(f"MISP: Dangerous command detected: {command}")
+                        self._log.info(
+                            "MISP: Dangerous command detected: {command}",
+                            command=command,
+                        )
 
             # When a session closes, create a comprehensive event
             elif event["eventid"] == "cowrie.session.closed":
                 # Set end time and calculate duration
                 self.session_tracking[session_id]["end_time"] = timestamp
 
-                if "duration" in event:
-                    self.session_tracking[session_id]["duration"] = event["duration"]
+                if "duration_ms" in event:
+                    self.session_tracking[session_id]["duration_ms"] = event[
+                        "duration_ms"
+                    ]
 
                 # Only create events for sessions with meaningful activity
                 if not self.session_tracking[session_id].get("event_created", False):
@@ -234,6 +260,12 @@ class Output(cowrie.core.output.Output):
                             session_id, self.session_tracking[session_id]
                         )
                         self.session_tracking[session_id]["event_created"] = True
+
+                # The session is over and anything reportable about it has
+                # been submitted, so drop it rather than carrying one entry
+                # per session ever seen for the life of the process. What
+                # stop() still walks is the sessions that never closed.
+                del self.session_tracking[session_id]
 
     def find_attribute(self, attribute_type, searchterm):
         """
@@ -268,9 +300,12 @@ class Output(cowrie.core.output.Output):
         try:
             self.misp_api.add_sighting(sighting, attribute)
             if self.debug:
-                log.msg(f"MISP: Added sighting to attribute {attribute['id']}")
+                self._log.info(
+                    "MISP: Added sighting to attribute {attribute_id}",
+                    attribute_id=attribute["id"],
+                )
         except Exception as e:
-            log.msg(f"MISP: Error adding sighting: {e}")
+            self._log.info("MISP: Error adding sighting: {error}", error=e)
 
     def create_session_event(self, session_id, session_data):
         """
@@ -330,10 +365,10 @@ class Output(cowrie.core.output.Output):
                 object_relation="end-time",
             )
 
-        if session_data.get("duration"):
+        if session_data.get("duration_ms"):
             session_object.add_attribute(
                 type="text",
-                value=str(session_data["duration"]),
+                value=str(session_data["duration_ms"]),
                 object_relation="duration",
             )
 
@@ -450,15 +485,20 @@ class Output(cowrie.core.output.Output):
         if session_data.get("downloads"):
             for download in session_data["downloads"]:
                 # Add the actual malware sample as a separate attribute to the event (not part of an object)
-                if "outfile" in download and download["shasum"] != "unknown":
+                outfile = download.get("outfile")
+                if (
+                    outfile
+                    and download.get("shasum", "unknown") != "unknown"
+                    and os.path.exists(outfile)
+                ):
                     malware_attr = MISPAttribute()
                     malware_attr.type = "malware-sample"
+                    # MISP malware-sample values are filename|md5; match that so
+                    # the attribute correlates with the file_download lookup.
                     malware_attr.value = (
-                        os.path.basename(download["outfile"]) + "|" + download["shasum"]
+                        f"{os.path.basename(outfile)}|{file_md5(outfile)}"
                     )
-                    malware_attr.data = Path(
-                        download["outfile"]
-                    )  # This uploads the actual binary
+                    malware_attr.data = Path(outfile)  # This uploads the actual binary
                     malware_attr.expand = "binary"
                     malware_attr.comment = (
                         f"File downloaded to Cowrie honeypot in session {session_id}"
@@ -541,7 +581,7 @@ class Output(cowrie.core.output.Output):
             f"Source IP: {session_data.get('src_ip', 'unknown')}",
             f"Start Time: {session_data.get('start_time', 'unknown')}",
             f"End Time: {session_data.get('end_time', 'unknown')}",
-            f"Duration: {session_data.get('duration', 'unknown')} seconds",
+            f"Duration: {session_data.get('duration_ms', 'unknown')} milliseconds",
             f"Authentication Success: {session_data.get('auth_success', False)}",
             f"Usernames Attempted: {', '.join(session_data.get('usernames', ['none']))}",
             f"Number of Commands: {len(session_data.get('commands', []))}",
@@ -585,6 +625,10 @@ class Output(cowrie.core.output.Output):
         result = self.misp_api.add_event(misp_event)
 
         if self.debug:
-            log.msg(f"MISP: Session event creation result for {session_id}: {result}")
+            self._log.info(
+                "MISP: Session event creation result for {session}: {result}",
+                session=session_id,
+                result=result,
+            )
 
         return result

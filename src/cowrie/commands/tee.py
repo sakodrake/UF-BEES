@@ -1,5 +1,7 @@
-# Copyright (c) 2020 Matej Dujava <mdujava@kocurkovo.cz>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2020 Matej Dujava <mdujava@kocurkovo.cz>
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 """
 tee command
 
@@ -8,9 +10,9 @@ tee command
 from __future__ import annotations
 
 import getopt
-import os
+import posixpath
 
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.fs import FileNotFound
@@ -22,6 +24,8 @@ class Command_tee(HoneyPotCommand):
     """
     tee command
     """
+
+    _log = Logger()
 
     append = False
     teeFiles: list[str]
@@ -53,20 +57,20 @@ class Command_tee(HoneyPotCommand):
                 self.ignoreInterupts = True
 
         for arg in args:
-            pname = self.fs.resolve_path(arg, self.protocol.cwd)
+            pname = self.fs.resolve_path(arg, self.cwd)
             if self.fs.isdir(pname):
                 self.errorWrite(f"tee: {arg}: Is a directory\n")
                 continue
 
-            folder_path = os.path.dirname(pname)
-            fname = self.fs.resolve_path(folder_path, self.protocol.cwd)
+            folder_path = posixpath.dirname(pname)
+            fname = self.fs.resolve_path(folder_path, self.cwd)
             if not self.fs.isdir(fname):
                 self.errorWrite(f"tee: {arg}: No such file or directory\n")
                 continue
 
             try:
                 self.fs.mkfile(
-                    pname, self.protocol.user.uid, self.protocol.user.gid, 0, 0o644
+                    pname, self.user["uid"], self.user["gid"], 0, 0o644
                 )
             except FileNotFound:
                 self.errorWrite(f"tee: {arg}: No such file or directory\n")
@@ -87,7 +91,8 @@ class Command_tee(HoneyPotCommand):
         This is the tee output, if no file supplied
         """
         if inb:
-            inp = inb.decode("utf-8")
+            # Piped input is attacker bytes and need not be valid UTF-8.
+            inp = inb.decode("utf-8", errors="replace")
         else:
             return
 
@@ -102,22 +107,22 @@ class Command_tee(HoneyPotCommand):
         """
         This function logs standard input from the user send to tee
         """
-        log.msg(
-            eventid="cowrie.session.input",
+        self.protocol.events.dispatch(
+            "cowrie.session.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="tee",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
         self.output(line.encode("utf-8"))
 
     def handle_CTRL_C(self) -> None:
         if not self.ignoreInterupts:
-            log.msg("Received CTRL-C, exiting..")
+            self._log.info("Received CTRL-C, exiting..")
             self.write("^C\n")
             self.exit()
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         """
         ctrl-d is end-of-file, time to terminate
         """

@@ -1,16 +1,16 @@
-# Copyright (c) 2019 Nuno Novais <nuno@noais.me>
-# All rights reserved.
-# All rights given to Cowrie project
+# SPDX-FileCopyrightText: 2019 NunoNovais <nuno@novais.me>
+# SPDX-FileCopyrightText: 2019 Nuno Novais <nuno@noais.me>
+# SPDX-FileCopyrightText: 2020-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
-This module contains the chpasswd commnad
+This module contains the chpasswd command
 """
 
 from __future__ import annotations
 
 import getopt
-
-from twisted.python import log
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -27,9 +27,9 @@ class Command_chpasswd(HoneyPotCommand):
             "  -e, --encrypted               supplied passwords are encrypted",
             "  -h, --help                    display this help message and exit",
             "  -m, --md5                     encrypt the clear text password using",
-            "                                the MD5 algorithm"
-            "  -R, --root CHROOT_DIR         directory to chroot into"
-            "  -s, --sha-rounds              number of SHA rounds for the SHA*"
+            "                                the MD5 algorithm",
+            "  -R, --root CHROOT_DIR         directory to chroot into",
+            "  -s, --sha-rounds              number of SHA rounds for the SHA*",
             "                                crypt algorithms",
         )
         for line in output:
@@ -40,17 +40,20 @@ class Command_chpasswd(HoneyPotCommand):
         try:
             for line in contents.split(b"\n"):
                 if len(line):
-                    _u, p = line.split(b":")
-                    if not len(p):
-                        self.write(f"chpasswd: line {c}: missing new password\n")
+                    if b":" not in line:
+                        self.write(f"chpasswd: line {c}: invalid format\n")
                     else:
-                        pass
-                        """
-                        TODO:
-                            - update shadow file
-                            - update userDB.txt (???)
-                            - updte auth_random.json (if in use)
-                        """
+                        _u, p = line.split(b":", 1)
+                        if not len(p):
+                            self.write(f"chpasswd: line {c}: missing new password\n")
+                        else:
+                            username = _u.decode(errors="ignore")
+                            self.protocol.events.dispatch(
+                                "cowrie.command.chpasswd",
+                                "Password change attempt for %(username)s",
+                                realm="chpasswd",
+                                username=username,
+                            )
                 c += 1
         except Exception:
             self.write(f"chpasswd: line {c}: missing new password\n")
@@ -67,7 +70,6 @@ class Command_chpasswd(HoneyPotCommand):
             self.exit()
             return
 
-        # Parse options
         for o, a in opts:
             if o in "-h":
                 self.help()
@@ -79,22 +81,20 @@ class Command_chpasswd(HoneyPotCommand):
                     self.help()
                     self.exit()
 
-        if not self.input_data:
-            pass
-        else:
+        if self.input_data:
             self.chpasswd_application(self.input_data)
             self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="chpasswd",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
         self.chpasswd_application(line.encode())
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 

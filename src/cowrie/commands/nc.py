@@ -1,28 +1,38 @@
+# SPDX-FileCopyrightText: 2017 fe7ch
+# SPDX-FileCopyrightText: 2017-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import getopt
 import socket
 import struct
+from typing import TYPE_CHECKING
 
+from twisted.internet import error, reactor
 from twisted.internet.defer import inlineCallbacks
-from twisted.python import log  # pylint: disable=no-name-in-module
+from twisted.internet.protocol import ClientFactory, Protocol, connectionDone
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
-from cowrie.core.network import communication_allowed, is_valid_port
-from cowrie.core.rate_limiter import RateLimiter
+from cowrie.core.download import outbound_rate_limiter
+from cowrie.core.network import (
+    is_valid_port,
+    outbound_bind_address,
+    resolve_allowed,
+)
 from cowrie.shell.command import HoneyPotCommand
+
+if TYPE_CHECKING:
+    from twisted.internet.interfaces import IAddress, IConnector, ITransport
+    from twisted.python import failure
 
 long = int
 
 commands = {}
 
-# Initialize rate limiter
-nc_rate_limiter = RateLimiter(
-    enabled=CowrieConfig.getboolean("honeypot", "nc_rate_limit_enabled", fallback=True),
-    max_requests=CowrieConfig.getint("honeypot", "nc_rate_limit_requests", fallback=5),
-    window_seconds=CowrieConfig.getint("honeypot", "nc_rate_limit_window", fallback=60),
-    max_keys=CowrieConfig.getint("honeypot", "nc_rate_limit_max_hosts", fallback=1000)
-)
+nc_rate_limiter = outbound_rate_limiter("nc")
 
 
 def makeMask(n: int) -> int:
@@ -56,23 +66,73 @@ def addressInNetwork(ip: int, net: int) -> int:
     return ip & net == net
 
 
+class NcClientProtocol(Protocol):
+    """
+    The outbound TCP connection of an nc session. It runs on the reactor's
+    asynchronous event loop, so a slow, silent, or malicious remote peer only
+    stalls the one session that connected to it, never the whole honeypot.
+    """
+
+    def __init__(self, command: Command_nc) -> None:
+        self.command = command
+
+    def connectionMade(self) -> None:
+        self.command.connectionEstablished(self)
+
+    def dataReceived(self, data: bytes) -> None:
+        self.command.remoteDataReceived(data)
+
+    def connectionLost(self, reason: failure.Failure = connectionDone) -> None:
+        self.command.remoteConnectionLost()
+
+
+class NcClientFactory(ClientFactory):
+    def __init__(self, command: Command_nc) -> None:
+        self.command = command
+
+    def buildProtocol(self, addr: IAddress | None) -> NcClientProtocol:
+        return NcClientProtocol(self.command)
+
+    def clientConnectionFailed(
+        self, connector: IConnector, reason: failure.Failure
+    ) -> None:
+        self.command.connectionFailed(reason)
+
+
 class Command_nc(HoneyPotCommand):
     """
     netcat
     """
 
-    s: socket.socket
+    _log = Logger()
+
     CONNECT_TIMEOUT: float = 10.0  # seconds
+    limit_size: int = CowrieConfig.getint("honeypot", "download_limit_size", fallback=0)
+
+    nc_transport: ITransport | None = None
+    received_size: int = 0
+    verbose: bool = False
+    zero_io: bool = False
+    host: str = ""
+    port: int = 0
 
     def print_usage_error(self, error_msg: str = "") -> None:
         """Print usage error message"""
         if error_msg:
             self.errorWrite(f"nc: {error_msg}\n")
 
-        self.errorWrite("usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]\n")
-        self.errorWrite("\t  [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n")
-        self.errorWrite("\t  [-q seconds] [-s source] [-T keyword] [-V rtable] [-W recvlimit] [-w timeout]\n")
-        self.errorWrite("\t  [-X proxy_protocol] [-x proxy_address[:port]]\t\t  [destination] [port]\n")
+        self.errorWrite(
+            "usage: nc [-46CDdFhklNnrStUuvZz] [-I length] [-i interval] [-M ttl]\n"
+        )
+        self.errorWrite(
+            "\t  [-m minttl] [-O length] [-P proxy_username] [-p source_port]\n"
+        )
+        self.errorWrite(
+            "\t  [-q seconds] [-s source] [-T keyword] [-V rtable] [-W recvlimit] [-w timeout]\n"
+        )
+        self.errorWrite(
+            "\t  [-X proxy_protocol] [-x proxy_address[:port]]\t\t  [destination] [port]\n"
+        )
 
     def print_help_message(self) -> None:
         self.errorWrite("OpenBSD netcat\n")
@@ -87,7 +147,9 @@ class Command_nc(HoneyPotCommand):
         self.errorWrite("\t\t-F\t\tPass socket fd\n")
         self.errorWrite("\t\t-h\t\tThis help text\n")
         self.errorWrite("\t\t-I length\tTCP receive buffer length\n")
-        self.errorWrite("\t\t-i interval\tDelay interval for lines sent, ports scanned\n")
+        self.errorWrite(
+            "\t\t-i interval\tDelay interval for lines sent, ports scanned\n"
+        )
         self.errorWrite("\t\t-k\t\tKeep inbound sockets open for multiple connects\n")
         self.errorWrite("\t\t-l\t\tListen mode, for inbound connects\n")
         self.errorWrite("\t\t-M ttl\t\tOutgoing TTL / Hop Limit\n")
@@ -107,13 +169,17 @@ class Command_nc(HoneyPotCommand):
         self.errorWrite("\t\t-u\t\tUDP mode\n")
         self.errorWrite("\t\t-V rtable\tSpecify alternate routing table\n")
         self.errorWrite("\t\t-v\t\tVerbose\n")
-        self.errorWrite("\t\t-W recvlimit\tTerminate after receiving a number of packets\n")
+        self.errorWrite(
+            "\t\t-W recvlimit\tTerminate after receiving a number of packets\n"
+        )
         self.errorWrite("\t\t-w timeout\tTimeout for connects and final net reads\n")
-        self.errorWrite("\t\t" '-X proto\tProxy protocol: "4", "5" (SOCKS) or "connect"' "\n")
+        self.errorWrite('\t\t-X proto\tProxy protocol: "4", "5" (SOCKS) or "connect"\n')
         self.errorWrite("\t\t-x addr[:port]\tSpecify proxy address and port\n")
         self.errorWrite("\t\t-Z\t\tDCCP mode\n")
         self.errorWrite("\t\t-z\t\tZero-I/O mode [used for scanning]\n")
-        self.errorWrite("\tPort numbers can be individual or ranges: lo-hi [inclusive]\n")
+        self.errorWrite(
+            "\tPort numbers can be individual or ranges: lo-hi [inclusive]\n"
+        )
 
     @inlineCallbacks
     def start(self):
@@ -211,77 +277,105 @@ class Command_nc(HoneyPotCommand):
 
         # Check rate limit before proceeding
         if not nc_rate_limiter.check(host):
-            log.msg(f"nc: rate limit exceeded for host: {host}. Simulating operation timeout")
+            self._log.info(
+                "nc: rate limit exceeded for host: {host}. Simulating operation timeout",
+                host=host,
+            )
             if verbose:
-                self.errorWrite(f"nc: connect to {host} port {port} (tcp) failed: Operation timed out\n")
+                self.errorWrite(
+                    f"nc: connect to {host} port {port} (tcp) failed: Operation timed out\n"
+                )
             self.exit()
             return
 
-        allowed = yield communication_allowed(host)
-        if not allowed:
-            log.msg(f"nc: blocked connection attempt to {host} (private/reserved IP range)")
+        resolved_ip = yield resolve_allowed(host)
+        if resolved_ip is None:
+            self._log.info(
+                "nc: blocked connection attempt to {host} (unresolvable or private/reserved address)",
+                host=host,
+            )
             self.exit()
             return
 
-        out_addr = None
-        try:
-            out_addr = (CowrieConfig.get("honeypot", "out_addr"), 0)
-        except Exception:
-            out_addr = ("0.0.0.0", 0)
+        self.host = host
+        self.port = int(port)
+        self.verbose = verbose
+        self.zero_io = zero_io
 
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.settimeout(self.CONNECT_TIMEOUT)
-        self.s.bind(out_addr)
-        try:
-            self.s.connect((host, int(port)))
+        # Connect to the IP resolve_allowed() validated, not to the hostname:
+        # re-resolving the hostname here would reopen the DNS-rebinding window
+        # that resolve_allowed() closed.
+        reactor.connectTCP(
+            resolved_ip,
+            self.port,
+            NcClientFactory(self),
+            timeout=self.CONNECT_TIMEOUT,
+            bindAddress=(outbound_bind_address(), 0),
+        )
 
-            if verbose:
-                self.errorWrite(f"Connection to {host} {port} port [tcp/*] succeeded!\n")
-
-            # Zero I/O mode: test connection only, no data transfer
-            if zero_io:
-                self.s.close()
-                self.exit()
-                return
-
-            self.recv_data()
-        except TimeoutError:
-            if verbose:
-                self.errorWrite(f"nc: connect to {host} port {port} (tcp) failed: Operation timed out\n")
+    def connectionEstablished(self, protocol: NcClientProtocol) -> None:
+        if self.exited:
+            # The connection completed after the command was already
+            # interrupted (^C or EOF while still connecting): tear it down.
+            if protocol.transport is not None:
+                protocol.transport.loseConnection()
+            return
+        self.nc_transport = protocol.transport
+        if self.verbose:
+            self.errorWrite(
+                f"Connection to {self.host} {self.port} port [tcp/*] succeeded!\n"
+            )
+        # Zero I/O mode: test connection only, no data transfer
+        if self.zero_io:
+            if self.nc_transport is not None:
+                self.nc_transport.loseConnection()
             self.exit()
-        except OSError:
-            if verbose:
-                self.errorWrite(f"nc: connect to {host} port {port} (tcp) failed: Connection refused\n")
-            self.exit()
-        except Exception:
-            self.exit()
 
-    def recv_data(self) -> None:
-        data = b""
-        while 1:
-            packet = self.s.recv(1024)
-            if packet == b"":
-                break
-            else:
-                data += packet
-
+    def remoteDataReceived(self, data: bytes) -> None:
+        if self.exited:
+            return
+        self.received_size += len(data)
+        if self.limit_size > 0 and self.received_size > self.limit_size:
+            self._log.info(
+                "nc: connection to {host}:{port} closed: exceeded download_limit_size",
+                host=self.host,
+                port=self.port,
+            )
+            if self.nc_transport is not None:
+                self.nc_transport.loseConnection()
+            self.exit()
+            return
         self.writeBytes(data)
-        self.s.close()
+
+    def remoteConnectionLost(self) -> None:
+        self.nc_transport = None
+        self.exit()
+
+    def connectionFailed(self, reason: failure.Failure) -> None:
+        if self.verbose:
+            if reason.check(error.TimeoutError):
+                self.errorWrite(
+                    f"nc: connect to {self.host} port {self.port} (tcp) failed: Operation timed out\n"
+                )
+            else:
+                self.errorWrite(
+                    f"nc: connect to {self.host} port {self.port} (tcp) failed: Connection refused\n"
+                )
         self.exit()
 
     def lineReceived(self, line: str) -> None:
-        if hasattr(self, "s"):
-            self.s.send(line.encode("utf8"))
+        if self.nc_transport is not None:
+            self.nc_transport.write(line.encode("utf8", errors="replace"))
 
     def handle_CTRL_C(self) -> None:
         self.write("^C\n")
-        if hasattr(self, "s"):
-            self.s.close()
+        if self.nc_transport is not None:
+            self.nc_transport.loseConnection()
         self.exit()
 
-    def handle_CTRL_D(self) -> None:
-        if hasattr(self, "s"):
-            self.s.close()
+    def eofReceived(self) -> None:
+        if self.nc_transport is not None:
+            self.nc_transport.loseConnection()
         self.exit()
 
 

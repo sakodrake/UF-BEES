@@ -1,10 +1,11 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2014-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 import getopt
-import os
 import posixpath
 import time
 from typing import Any
@@ -14,25 +15,33 @@ import treq
 from twisted.internet import defer, error, reactor
 from twisted.internet.defer import CancelledError, inlineCallbacks
 from twisted.internet.protocol import ClientCreator, Protocol
+from twisted.logger import Logger
 from twisted.protocols.ftp import CommandFailed, FTPClient
-from twisted.python import log
+from twisted.python import failure
 from twisted.web.iweb import UNKNOWN_LENGTH
 
 from cowrie.core.artifact import Artifact
 from cowrie.core.config import CowrieConfig
-from cowrie.core.network import communication_allowed
-from cowrie.core.rate_limiter import RateLimiter
+from cowrie.core.download import (
+    BlockedAddress,
+    UnreachableAddress,
+    capture_download,
+    fetch,
+    outbound_rate_limiter,
+    report_download_failure,
+)
+from cowrie.core.network import (
+    DownloadLimitExceeded,
+    abort_body,
+    communication_allowed,
+    is_ip_address,
+    outbound_bind_address,
+)
 from cowrie.shell.command import HoneyPotCommand
 
 commands = {}
 
-# Initialize rate limiter
-wget_rate_limiter = RateLimiter(
-    enabled=CowrieConfig.getboolean("honeypot", "wget_rate_limit_enabled", fallback=True),
-    max_requests=CowrieConfig.getint("honeypot", "wget_rate_limit_requests", fallback=5),
-    window_seconds=CowrieConfig.getint("honeypot", "wget_rate_limit_window", fallback=60),
-    max_keys=CowrieConfig.getint("honeypot", "wget_rate_limit_max_hosts", fallback=1000)
-)
+wget_rate_limiter = outbound_rate_limiter("wget")
 
 
 def tdiff(seconds: int) -> str:
@@ -88,6 +97,8 @@ class Command_wget(HoneyPotCommand):
     wget command
     """
 
+    _log = Logger()
+
     limit_size: int = CowrieConfig.getint("honeypot", "download_limit_size", fallback=0)
     quiet: bool = False
 
@@ -98,7 +109,9 @@ class Command_wget(HoneyPotCommand):
     currentlength: int = 0  # partial size during download
     totallength: int = 0  # total length
     proglen: int = 0
-    wget_version: str = "1.25.0"  # GNU wget version used in --help and User-Agent header
+    wget_version: str = (
+        "1.25.0"  # GNU wget version used in --help and User-Agent header
+    )
     url: bytes
     host: str
     scheme: str
@@ -110,6 +123,7 @@ class Command_wget(HoneyPotCommand):
 
     def print_usage_error(self, error_msg: str = "") -> None:
         """Print usage error message"""
+        self.exit_code = 1
         if error_msg:
             self.errorWrite(f"wget: {error_msg}\n")
         self.errorWrite("Usage: wget [OPTION]... [URL]...\n\n")
@@ -123,24 +137,34 @@ class Command_wget(HoneyPotCommand):
         (that are silently ignored for compatibility).
         """
 
-        self.write(f"GNU Wget {self.wget_version}, a non-interactive network retriever.\n")
+        self.write(
+            f"GNU Wget {self.wget_version}, a non-interactive network retriever.\n"
+        )
         self.write("Usage: wget [OPTION]... [URL]...\n\n")
         self.write("Startup:\n")
         self.write("  -h,  --help              print this help\n\n")
         self.write("Download:\n")
-        self.write("  -c,  --continue          resume getting a partially-downloaded file\n")
+        self.write(
+            "  -c,  --continue          resume getting a partially-downloaded file\n"
+        )
         self.write("  -O                       write documents to FILE\n")
         self.write("  -q,  --quiet             quiet (no output)\n")
         self.write("  -T,  --timeout=SECONDS   set all timeout values to SECONDS\n")
         self.write("       --tries=NUMBER      set number of retries to NUMBER\n\n")
         self.write("HTTP options:\n")
         self.write("       --header=STRING     insert STRING among the headers\n")
-        self.write("       --post-data=STRING  use the POST method; send STRING as the data\n")
-        self.write("       --max-redirect=NUM  maximum redirections allowed per page\n\n")
+        self.write(
+            "       --post-data=STRING  use the POST method; send STRING as the data\n"
+        )
+        self.write(
+            "       --max-redirect=NUM  maximum redirections allowed per page\n\n"
+        )
         self.write("Directories:\n")
         self.write("  -P,  --directory-prefix=PREFIX  save files to PREFIX/..\n\n")
         self.write("Email bug reports, questions, discussions to <bug-wget@gnu.org>\n")
-        self.write("and/or open issues at https://savannah.gnu.org/bugs/?func=additem&group=wget.\n")
+        self.write(
+            "and/or open issues at https://savannah.gnu.org/bugs/?func=additem&group=wget.\n"
+        )
 
     @inlineCallbacks
     def start(self):
@@ -198,20 +222,31 @@ class Command_wget(HoneyPotCommand):
         if "://" not in url:
             url = f"http://{url}"
 
-        urldata = parse.urlparse(url)
+        # urlparse() raises on malformed IPv6 brackets, and .port and .hostname
+        # are parsed lazily and raise rather than returning None for a port
+        # that is not a decimal 0-65535. The URL is attacker input.
+        try:
+            urldata = parse.urlparse(url)
+            hostname = urldata.hostname
+            port = urldata.port
+        except ValueError:
+            self.print_usage_error("invalid URL")
+            self.exit()
+            return
+
         self.scheme = (urldata.scheme or "http").lower()
 
         # self.host is required as it will be used as key in rate limiter from this point forward
-        if urldata.hostname:
-            self.host = urldata.hostname
+        if hostname:
+            self.host = hostname
         else:
             self.print_usage_error("invalid URL")
             self.exit()
             return
 
         # Determine self.port: use explicit port from URL, otherwise use scheme default
-        if urldata.port is not None:
-            self.port = urldata.port
+        if port is not None:
+            self.port = port
         elif self.scheme == "https":
             self.port = 443
         elif self.scheme == "ftp":
@@ -221,19 +256,22 @@ class Command_wget(HoneyPotCommand):
 
         # Check rate limit before proceeding
         if not wget_rate_limiter.check(self.host):
-            log.msg(f"wget: rate limit exceeded for host: {self.host}. Simulating connection timeout")
+            self._log.info(
+                "wget: rate limit exceeded for host: {host}. Simulating connection timeout",
+                host=self.host,
+            )
 
             # Simulate connection timeout
             self.errorWrite(f"Connecting to {self.host}:{self.port}... ")
             self.errorWrite("failed: Connection timed out.\n")
             self.errorWrite("Retrying.\n\n")
 
-            self.exit()
+            self.exit(1)
             return
 
         allowed = yield communication_allowed(self.host)
         if not allowed:
-            log.msg("Attempt to access blocked network address")
+            self._log.info("Attempt to access blocked network address")
             if not self.quiet:
                 tm = time.strftime("%Y-%m-%d %H:%M:%S")
                 self.errorWrite(f"--{tm}--  {url}\n")
@@ -241,7 +279,7 @@ class Command_wget(HoneyPotCommand):
                     f"Resolving {self.host} ({self.host})... failed: Temporary failure in name resolution.\n"
                 )
             self.errorWrite(f"wget: unable to resolve host address ‘{self.host}’\n")
-            self.exit()
+            self.exit(1)
             return None
 
         self.url = url.encode("utf8")
@@ -250,16 +288,16 @@ class Command_wget(HoneyPotCommand):
             self.outfile = urldata.path.split("/")[-1]
             if not len(self.outfile.strip()) or not urldata.path.count("/"):
                 self.outfile = "index.html"
-            self.outfile = self.fs.resolve_path(self.outfile, self.protocol.cwd)
+            self.outfile = self.fs.resolve_path(self.outfile, self.cwd)
 
         elif self.outfile != "-":
-            self.outfile = self.fs.resolve_path(self.outfile, self.protocol.cwd)
-            path = os.path.dirname(self.outfile)
+            self.outfile = self.fs.resolve_path(self.outfile, self.cwd)
+            path = posixpath.dirname(self.outfile)
             if not path or not self.fs.exists(path) or not self.fs.isdir(path):
                 self.errorWrite(
                     f"wget: {self.outfile}: Cannot open: No such file or directory\n"
                 )
-                self.exit()
+                self.exit(1)
                 return
 
         self.artifact = Artifact("wget-download")
@@ -268,32 +306,38 @@ class Command_wget(HoneyPotCommand):
             tm = time.strftime("%Y-%m-%d %H:%M:%S")
             self.errorWrite(f"--{tm}--  {url}\n")
             self.errorWrite(f"Connecting to {self.host}:{self.port}... connected.\n")
-            proto_label = "HTTP" if self.scheme in ("http", "https") else self.scheme.upper()
+            proto_label = (
+                "HTTP" if self.scheme in ("http", "https") else self.scheme.upper()
+            )
             self.errorWrite(f"{proto_label} request sent, awaiting response... ")
 
-        if self.scheme == "ftp":
-            self.deferred = self.ftpDownload(urldata)
-            if self.deferred:
-                self.deferred.addErrback(self.error)
-        else:
-            self.deferred = self.httpDownload(url)
-            if self.deferred:
-                self.deferred.addCallback(self.success)
-                self.deferred.addErrback(self.error)
+        # Starting the transfer can raise synchronously before any Deferred
+        # exists: connectTCP rejects an FTP host it cannot build a connection
+        # for. Route that raise through error() so the command exits instead of
+        # being orphaned on the cmdstack until session timeout.
+        try:
+            if self.scheme == "ftp":
+                self.deferred = self.ftpDownload(urldata)
+                if self.deferred:
+                    self.deferred.addErrback(self.error)
+            else:
+                self.deferred = self.httpDownload(url)
+                if self.deferred:
+                    self.deferred.addCallback(self.success)
+                    self.deferred.addErrback(self.error)
+        except Exception:
+            self.error(failure.Failure())
+            return
 
     def httpDownload(self, url: str) -> Any:
         """
         Download `url`
         """
-        headers = {"User-Agent": [f"Wget/{self.wget_version} (linux-gnu)"]}
+        headers: dict[bytes | str, list[bytes | str]] = {
+            "User-Agent": [f"Wget/{self.wget_version} (linux-gnu)"]
+        }
 
-        # TODO: use designated outbound interface
-        # out_addr = None
-        # if CowrieConfig.has_option("honeypot", "out_addr"):
-        #     out_addr = (CowrieConfig.get("honeypot", "out_addr"), 0)
-
-        deferred = treq.get(url=url, allow_redirects=True, headers=headers, timeout=10)
-        return deferred
+        return fetch(reactor, url, headers=headers, timeout=10)
 
     def ftpDownload(self, urldata: parse.ParseResult) -> Any:
         """
@@ -309,7 +353,7 @@ class Command_wget(HoneyPotCommand):
 
         if not remote_path or remote_path.endswith("/"):
             self.errorWrite("wget: unsupported directory target in FTP URL\n")
-            self.exit()
+            self.exit(1)
             return None
 
         self.ftp_remote_dir = posixpath.dirname(remote_path)
@@ -317,13 +361,26 @@ class Command_wget(HoneyPotCommand):
 
         if not self.ftp_remote_file:
             self.errorWrite("wget: missing remote filename in FTP URL\n")
-            self.exit()
+            self.exit(1)
+            return None
+
+        ip = is_ip_address(self.host)
+        if ip is not None and ip.version == 6:
+            # The outbound source address is an IPv4 one, so an IPv6 server is
+            # as unreachable here as it is on the HTTP path.
+            self.errorWrite("failed: Network is unreachable.\n")
+            self.exit(1)
             return None
 
         self.ftp_client = None
 
         creator = ClientCreator(reactor, FTPClient, username, password, passive=True)
-        deferred = creator.connectTCP(self.host, self.port, timeout=30)
+        deferred = creator.connectTCP(
+            self.host,
+            self.port,
+            timeout=30,
+            bindAddress=(outbound_bind_address(), 0),
+        )
         deferred.addCallback(self._ftp_connected)
         return deferred
 
@@ -349,14 +406,16 @@ class Command_wget(HoneyPotCommand):
             if self.ftp_client:
                 try:
                     quit_deferred = self.ftp_client.quit()
-                    if isinstance(quit_deferred, defer.Deferred):
-                        quit_deferred.addErrback(
-                            lambda failure: log.msg(
-                                f"FTP quit failed during abort: {failure.getErrorMessage()}"
-                            )
+                    quit_deferred.addErrback(
+                        lambda f: self._log.info(
+                            "FTP quit failed during abort: {error}",
+                            error=f.getErrorMessage(),
                         )
+                    )
                 except Exception as e:  # pragma: no cover - defensive
-                    log.msg(f"FTP quit raised exception during abort: {e!s}")
+                    self._log.info(
+                        "FTP quit raised exception during abort: {error}", error=e
+                    )
                 finally:
                     self.ftp_client = None
             return defer.succeed(None)
@@ -376,14 +435,13 @@ class Command_wget(HoneyPotCommand):
         if self.ftp_client:
             try:
                 quit_deferred = self.ftp_client.quit()
-                if isinstance(quit_deferred, defer.Deferred):
-                    quit_deferred.addErrback(
-                        lambda failure: log.msg(
-                            f"FTP quit failed: {failure.getErrorMessage()}"
-                        )
+                quit_deferred.addErrback(
+                    lambda f: self._log.info(
+                        "FTP quit failed: {error}", error=f.getErrorMessage()
                     )
+                )
             except Exception as e:  # pragma: no cover - defensive
-                log.msg(f"FTP quit raised exception: {e!s}")
+                self._log.info("FTP quit raised exception: {error}", error=e)
             finally:
                 self.ftp_client = None
 
@@ -406,8 +464,11 @@ class Command_wget(HoneyPotCommand):
             and self.limit_size > 0
             and self.totallength > self.limit_size
         ):
-            log.msg(
-                f"Not saving URL ({self.url.decode()}) (size: {self.totallength}) exceeds file size limit ({self.limit_size})"
+            self._log.info(
+                "Not saving URL ({url}) (size: {size}) exceeds file size limit ({limit})",
+                url=self.url.decode(),
+                size=self.totallength,
+                limit=self.limit_size,
             )
             self.exit()
             return False
@@ -427,21 +488,39 @@ class Command_wget(HoneyPotCommand):
             else:
                 self.errorWrite(f"Length: unspecified [{self.contenttype}]\n")
 
-            dest = "STDOUT" if self.outfile is None or self.outfile == "-" else self.outfile
+            dest = (
+                "STDOUT"
+                if self.outfile is None or self.outfile == "-"
+                else self.outfile
+            )
             self.errorWrite(f"Saving to: `{dest}'\n\n")
 
         return True
 
     def handle_CTRL_C(self) -> None:
         self.write("^C\n")
-        self.exit()
+        self.exit(130)  # 128 + SIGINT
+
+    def exit(self, code: int | None = None) -> None:
+        # Close the download artifact on every exit path so an aborted download
+        # (CTRL-C, size limit, ...) does not leave its empty temp file behind in
+        # the download directory. close() is idempotent and removes an empty
+        # artifact, so the normal success/error paths are unaffected.
+        artifact = getattr(self, "artifact", None)
+        if artifact is not None:
+            artifact.close()
+        HoneyPotCommand.exit(self, code)
 
     def success(self, response):
         """
         successful treq get
         """
+        # Response metadata comes from an attacker-directed server and need
+        # not be valid UTF-8.
         if response.headers.hasHeader(b"content-type"):
-            contenttype = response.headers.getRawHeaders(b"content-type")[0].decode()
+            contenttype = response.headers.getRawHeaders(b"content-type")[0].decode(
+                errors="replace"
+            )
         else:
             contenttype = "text/whatever"
 
@@ -451,7 +530,7 @@ class Command_wget(HoneyPotCommand):
         if code is not None:
             if phrase:
                 if isinstance(phrase, bytes):
-                    phrase = phrase.decode()
+                    phrase = phrase.decode(errors="replace")
                 status_line = f"{code} {phrase}"
             else:
                 status_line = str(code)
@@ -463,6 +542,9 @@ class Command_wget(HoneyPotCommand):
             total_length = None
 
         if not self._begin_download(total_length, contenttype, status_line):
+            # Stop the transfer; an undelivered body would otherwise keep
+            # downloading and buffering in memory.
+            abort_body(response)
             return None
 
         deferred = treq.collect(response, self.collect)
@@ -473,18 +555,34 @@ class Command_wget(HoneyPotCommand):
         """
         partial collect
         """
+        if self.exited:
+            # The command exited while the transfer was still in flight (size
+            # limit, CTRL-C); drop late chunks instead of writing to the
+            # closed artifact.
+            return
         eta: float
         self.currentlength += len(data)
         if self.limit_size > 0 and self.currentlength > self.limit_size:
-            log.msg(
-                f"Not saving URL ({self.url.decode()}) (size: {self.currentlength}) exceeds file size limit ({self.limit_size})"
+            self._log.info(
+                "Not saving URL ({url}) (size: {size}) exceeds file size limit ({limit})",
+                url=self.url.decode(),
+                size=self.currentlength,
+                limit=self.limit_size,
             )
             self.exit()
-            return
+            # treq closes the connection when the collector raises, aborting
+            # the transfer instead of draining the rest of the body. The
+            # errback this triggers is inert because the command has exited.
+            raise DownloadLimitExceeded
 
         self.artifact.write(data)
 
-        self.speed = self.currentlength / (time.time() - self.started)
+        # Clamp elapsed to 1 microsecond: on a localhost transfer the first
+        # chunk can arrive within the same time.time() tick as self.started,
+        # which would divide by zero. 1e-6 is below any real network RTT, so it
+        # does not distort the reported speed on genuine connections.
+        elapsed = max(time.time() - self.started, 1e-6)
+        self.speed = self.currentlength / elapsed
         if self.totallength != 0:
             percent = int(self.currentlength / self.totallength * 100)
             spercent = f"{percent}%"
@@ -506,13 +604,18 @@ class Command_wget(HoneyPotCommand):
         self.proglen = len(s)
         self.lastupdate = time.time()
 
-        if not self.outfile:
+        if not self.outfile or self.outfile == "-":
             self.writeBytes(data)
 
     def collectioncomplete(self, data: None) -> None:
         """
         this gets called once collection is complete
         """
+        if self.exited:
+            # The command exited while the transfer was still in flight; the
+            # partial artifact was already handled by exit(), so don't report
+            # a download for a dead command or exit again.
+            return
         self.artifact.close()
 
         self.totallength = self.currentlength
@@ -526,7 +629,11 @@ class Command_wget(HoneyPotCommand):
                 )
             )
             self.errorWrite("\n\n")
-            dest = "stdout" if self.outfile is None or self.outfile == "-" else self.outfile
+            dest = (
+                "stdout"
+                if self.outfile is None or self.outfile == "-"
+                else self.outfile
+            )
             self.errorWrite(
                 "{} ({:3.2f} KB/s) - `{}' saved [{}/{}]\n\n".format(
                     time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -537,32 +644,12 @@ class Command_wget(HoneyPotCommand):
                 )
             )
 
-        # Update the honeyfs to point to artifact file if output is to file
-        if self.outfile and self.protocol.user:
-            self.fs.mkfile(
-                self.outfile,
-                self.protocol.user.uid,
-                self.protocol.user.gid,
-                self.currentlength,
-                33188,
-            )
-            self.fs.update_realfile(
-                self.fs.getfile(self.outfile), self.artifact.shasumFilename
-            )
-
-        self.protocol.logDispatch(
-            eventid="cowrie.session.file_download",
-            format="Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s",
-            url=self.url.decode(),
-            outfile=self.artifact.shasumFilename,
-            shasum=self.artifact.shasum,
-        )
-        log.msg(
-            eventid="cowrie.session.file_download",
-            format="Downloaded URL (%(url)s) with SHA-256 %(shasum)s to %(outfile)s",
-            url=self.url.decode(),
-            outfile=self.artifact.shasumFilename,
-            shasum=self.artifact.shasum,
+        capture_download(
+            self,
+            self.artifact,
+            self.url.decode(),
+            outfile=None if self.outfile == "-" else self.outfile,
+            size=self.currentlength,
         )
         self.exit()
 
@@ -570,11 +657,25 @@ class Command_wget(HoneyPotCommand):
         """
         handle errors
         """
-        self.protocol.logDispatch(
-            eventid="cowrie.session.file_download.failed",
-            format="Attempt to download file(s) from URL (%(url)s) failed",
-            url=self.url.decode(),
-        )
+        if self.exited:
+            # The command exited while the transfer was still in flight; a
+            # late failure of that transfer is not this command's outcome.
+            return
+        self.exit_code = 1
+        report_download_failure(self, self.url.decode())
+
+        if response.check(BlockedAddress) is not None:
+            # A redirect reached a host the honeypot must not contact.
+            self.errorWrite(
+                f"wget: unable to resolve host address ‘{response.value.host}’\n"
+            )
+            self.exit()
+            return
+
+        if response.check(UnreachableAddress) is not None:
+            self.errorWrite("failed: Network is unreachable.\n")
+            self.exit()
+            return
 
         if response.check(error.DNSLookupError) is not None:
             self.errorWrite(
@@ -603,15 +704,17 @@ class Command_wget(HoneyPotCommand):
             self.exit()
             return
 
-        if response.check(error.ConnectingDone) is not None:
+        if response.check(error.ConnectionDone) is not None:
             self.errorWrite("No data received.\n")
             self.exit()
             return
 
-        log.err(f"Unhandled wget error: {response!s}")
-        log.msg(f"Uhhandled wget traceback: {response.printTraceback()}")
-        if hasattr(response, "getErrorMessage"):  # Exceptions
-            log.msg(f"Unhandled wget error message: {response.getErrorMessage}")
+        if response.check(error.TCPTimedOutError) is not None:
+            self.errorWrite("failed: Connection timed out.\n")
+            self.exit()
+            return
+
+        self._log.failure("Unhandled wget error", failure=response)
         self.errorWrite("\n")
         self.exit()
 

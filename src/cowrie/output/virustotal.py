@@ -1,30 +1,6 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 Send SSH logins to VirusTotal using v3 API
@@ -37,13 +13,14 @@ import datetime
 import json
 import os
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlencode, urlparse
+from urllib.parse import quote, urlencode, urlparse
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 from twisted.internet import defer, reactor
-from twisted.python import log
+from twisted.internet.protocol import connectionDone
+from twisted.logger import Logger
 from twisted.web import client, http_headers
 from twisted.web.iweb import IBodyProducer, IResponse
 from zope.interface import implementer
@@ -73,7 +50,7 @@ def readBody(response: IResponse) -> defer.Deferred:
         def dataReceived(self, data):
             self.data += data
 
-        def connectionLost(self, reason):
+        def connectionLost(self, reason=connectionDone):
             d.callback(self.data)
 
     collector = BodyCollector()
@@ -85,6 +62,8 @@ class Output(cowrie.core.output.Output):
     """
     virustotal output
     """
+
+    _log = Logger()
 
     apiKey: str
     debug: bool = False
@@ -138,15 +117,15 @@ class Output(cowrie.core.output.Output):
     def write(self, event: dict[str, Any]) -> None:
         if event["eventid"] == "cowrie.session.file_download":
             if self.scan_url and "url" in event:
-                log.msg("Checking url scan report at VT")
+                self._log.info("Checking url scan report at VT")
                 self.scanurl(event)
             if self._is_new_shasum(event["shasum"]) and self.scan_file:
-                log.msg("Checking file scan report at VT")
+                self._log.info("Checking file scan report at VT")
                 self.scanfile(event)
 
         elif event["eventid"] == "cowrie.session.file_upload":
             if self._is_new_shasum(event["shasum"]) and self.scan_file:
-                log.msg("Checking file scan report at VT")
+                self._log.info("Checking file scan report at VT")
                 self.scanfile(event)
 
     def _is_new_shasum(self, shasum):
@@ -164,7 +143,9 @@ class Output(cowrie.core.output.Output):
         # If the file was first downloaded more than a "period of time" (e.g 1 min) ago -
         # it has been apparently scanned before in VT and therefore is not going to be checked again
         if file_modification_time < datetime.datetime.now() - TIME_SINCE_FIRST_DOWNLOAD:
-            log.msg(f"File with shasum '{shasum}' was downloaded before")
+            self._log.info(
+                "File with shasum '{shasum}' was downloaded before", shasum=shasum
+            )
             return False
         return True
 
@@ -216,11 +197,15 @@ class Output(cowrie.core.output.Output):
                     d.addCallback(process_response)
                 return d
             else:
-                log.msg(f"{error_prefix} failed: {response.code} {response.phrase}")
+                self._log.info(
+                    "{prefix} failed: {code} {phrase}",
+                    prefix=error_prefix,
+                    code=response.code,
+                    phrase=response.phrase,
+                )
 
         def cbError(failure):
-            log.msg(f"{error_prefix} error")
-            failure.printTraceback()
+            self._log.failure("{prefix} error", failure=failure, prefix=error_prefix)
 
         d.addCallback(cbResponse)
         d.addErrback(cbError)
@@ -251,18 +236,20 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT scanfile result: {body_bytes}")
+                self._log.info("VT scanfile result: {body}", body=body_bytes)
             result = body_bytes.decode("utf8")
             j = json.loads(result)
 
             # Check for errors in v3 API response
             if "error" in j:
                 if j["error"]["code"] == "NotFoundError":
-                    log.msg("VT: New file - not found in database")
-                    log.msg(
+                    self._log.info("VT: New file - not found in database")
+                    self.dispatch(
                         eventid="cowrie.virustotal.scanfile",
                         format="VT: New file %(sha256)s",
                         session=event["session"],
+                        src_ip=event["src_ip"],
+                        protocol=event["protocol"],
                         sha256=event["shasum"],
                         is_new="true",
                     )
@@ -274,10 +261,14 @@ class Output(cowrie.core.output.Output):
                         fileName = event["shasum"]
 
                     if self.upload:
-                        return self.postfile(event["outfile"], fileName)
+                        return self.postfile(
+                            event["outfile"], fileName, event["shasum"]
+                        )
                 else:
-                    log.msg(
-                        f"VT: Error - {j['error']['code']}: {j['error']['message']}"
+                    self._log.info(
+                        "VT: Error - {code}: {msg}",
+                        code=j["error"]["code"],
+                        msg=j["error"]["message"],
                     )
                 return
 
@@ -290,18 +281,20 @@ class Output(cowrie.core.output.Output):
                 last_analysis_results = attributes.get("last_analysis_results", {})
                 stats = attributes.get("last_analysis_stats", {})
 
-                log.msg("VT: File found in database")
+                self._log.info("VT: File found in database")
                 scans_summary = self._parse_scan_results(last_analysis_results)
 
                 malicious_count = stats.get("malicious", 0)
                 total_count = sum(stats.values())
                 scan_date = attributes.get("last_analysis_date", "unknown")
 
-                log.msg(
+                self.dispatch(
                     eventid="cowrie.virustotal.scanfile",
                     format="VT: Binary file with sha256 %(sha256)s was found malicious "
                     "by %(positives)s out of %(total)s feeds (scanned on %(scan_date)s)",
                     session=event["session"],
+                    src_ip=event["src_ip"],
+                    protocol=event["protocol"],
                     positives=malicious_count,
                     total=total_count,
                     scan_date=scan_date,
@@ -309,11 +302,12 @@ class Output(cowrie.core.output.Output):
                     scans=scans_summary,
                     is_new="false",
                 )
-                log.msg(
-                    f"VT: permalink: https://www.virustotal.com/gui/file/{event['shasum']}"
+                self._log.info(
+                    "VT: permalink: https://www.virustotal.com/gui/file/{sha256}",
+                    sha256=event["shasum"],
                 )
             else:
-                log.msg("VT: unexpected response format")
+                self._log.info("VT: unexpected response format")
 
         return self._make_request(
             b"GET",
@@ -324,16 +318,20 @@ class Output(cowrie.core.output.Output):
             error_prefix="VT scanfile",
         )
 
-    def postfile(self, artifact, fileName):
+    def postfile(self, artifact, fileName, sha256):
         """
-        Send a file to VirusTotal
+        Send a file to VirusTotal.
+
+        ``sha256`` is the file's hash. The upload response only carries an
+        *analysis* id, but the comment and collection endpoints expect the file
+        identifier, so they are addressed by the hash instead.
         """
         vtUrl = f"{VTAPI_URL}files".encode()
         fields = {}  # v3 API doesn't need apikey in form data
         with open(artifact, "rb") as f:
             files = {("file", fileName, f)}
             if self.debug:
-                log.msg(f"submitting to VT: {files!r}")
+                self._log.info("submitting to VT: {files!r}", files=files)
             contentType, body = encode_multipart_formdata(fields, files)
         producer = StringProducer(body)
         headers = self._build_headers(
@@ -342,33 +340,33 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT postfile result: {body_bytes}")
+                self._log.info("VT postfile result: {body}", body=body_bytes)
             result = body_bytes.decode("utf8")
             j = json.loads(result)
 
             # Check for errors in v3 API response
             if "error" in j:
-                log.msg(
-                    f"VT: Upload error - {j['error']['code']}: {j['error']['message']}"
+                self._log.info(
+                    "VT: Upload error - {code}: {msg}",
+                    code=j["error"]["code"],
+                    msg=j["error"]["message"],
                 )
                 return
 
-            # Process successful upload response
+            # Process successful upload response. The response id is an analysis
+            # id, not the file hash, so comment/collection use the sha256.
             if "data" in j:
                 data = j["data"]
-                file_id = data.get("id")
-                if file_id:
-                    log.msg("VT: File uploaded successfully")
-                    # Add to collection if enabled
+                if data.get("id"):
+                    self._log.info("VT: File uploaded successfully")
                     if self.collection_name:
-                        self._add_to_collection("files", file_id, f"file {file_id}")
-                    # Post comment if enabled
+                        self._add_to_collection("files", sha256, f"file {sha256}")
                     if self.comment:
-                        return self._post_comment("files", file_id, "Comment")
+                        return self._post_comment("files", sha256, "Comment")
                 else:
-                    log.msg("VT: Upload successful but no file ID returned")
+                    self._log.info("VT: Upload successful but no file ID returned")
             else:
-                log.msg("VT: unexpected upload response format")
+                self._log.info("VT: unexpected upload response format")
 
         return self._make_request(
             b"POST",
@@ -384,8 +382,9 @@ class Output(cowrie.core.output.Output):
         Check url scan report for a hash
         """
         if event["url"] in self.url_cache:
-            log.msg(
-                f"output_virustotal: url {event['url']} was already successfully submitted"
+            self._log.info(
+                "output_virustotal: url {url} was already successfully submitted",
+                url=event["url"],
             )
             return
 
@@ -398,9 +397,11 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT scanurl result: {body_bytes}")
+                self._log.info("VT scanurl result: {body}", body=body_bytes)
             if body_bytes == b"[]\n":
-                log.err(f"VT scanurl did not return results: {body_bytes}")
+                self._log.error(
+                    "VT scanurl did not return results: {body}", body=body_bytes
+                )
                 return
             result = body_bytes.decode("utf8")
             j = json.loads(result)
@@ -411,19 +412,23 @@ class Output(cowrie.core.output.Output):
             # Check for errors in v3 API response
             if "error" in j:
                 if j["error"]["code"] == "NotFoundError":
-                    log.msg("VT: New URL - not found in database")
-                    log.msg(
+                    self._log.info("VT: New URL - not found in database")
+                    self.dispatch(
                         eventid="cowrie.virustotal.scanurl",
                         format="VT: New URL %(url)s",
                         session=event["session"],
+                        src_ip=event["src_ip"],
+                        protocol=event["protocol"],
                         url=event["url"],
                         is_new="true",
                     )
                     # Submit URL for scanning
                     return self.submiturl(event)
                 else:
-                    log.msg(
-                        f"VT: Error - {j['error']['code']}: {j['error']['message']}"
+                    self._log.info(
+                        "VT: Error - {code}: {msg}",
+                        code=j["error"]["code"],
+                        msg=j["error"]["message"],
                     )
                 return
 
@@ -435,23 +440,25 @@ class Output(cowrie.core.output.Output):
                 # Check if URL has been scanned
                 last_analysis_results = attributes.get("last_analysis_results", {})
                 if not last_analysis_results:
-                    log.msg("VT: URL was submitted but has not yet been scanned")
+                    self._log.info("VT: URL was submitted but has not yet been scanned")
                     return
 
                 stats = attributes.get("last_analysis_stats", {})
 
-                log.msg("VT: URL has been scanned before")
+                self._log.info("VT: URL has been scanned before")
                 scans_summary = self._parse_scan_results(last_analysis_results)
 
                 malicious_count = stats.get("malicious", 0)
                 total_count = sum(stats.values())
                 scan_date = attributes.get("last_analysis_date", "unknown")
 
-                log.msg(
+                self.dispatch(
                     eventid="cowrie.virustotal.scanurl",
                     format="VT: URL %(url)s was found malicious by "
                     "%(positives)s out of %(total)s feeds (scanned on %(scan_date)s)",
                     session=event["session"],
+                    src_ip=event["src_ip"],
+                    protocol=event["protocol"],
                     positives=malicious_count,
                     total=total_count,
                     scan_date=scan_date,
@@ -459,23 +466,29 @@ class Output(cowrie.core.output.Output):
                     scans=scans_summary,
                     is_new="false",
                 )
-                log.msg(f"VT: permalink: https://www.virustotal.com/gui/url/{url_id}")
+                self._log.info(
+                    "VT: permalink: https://www.virustotal.com/gui/url/{url_id}",
+                    url_id=url_id,
+                )
             else:
-                log.msg("VT: unexpected response format")
+                self._log.info("VT: unexpected response format")
 
         d = self._make_request(
             b"GET",
             vtUrl,
             headers,
             process_response=process_response,
+            valid_codes=[200, 404],
             error_prefix="VT scanurl",
         )
         if d:
             # Log success message on successful response
             d.addCallback(
-                lambda _: log.msg("VT scanurl successful: 200 OK")
-                if _ is not None
-                else None
+                lambda _: (
+                    self._log.info("VT scanurl successful: 200 OK")
+                    if _ is not None
+                    else None
+                )
             )
         return d
 
@@ -489,33 +502,39 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT submiturl result: {body_bytes}")
+                self._log.info("VT submiturl result: {body}", body=body_bytes)
             result = body_bytes.decode("utf8")
             j = json.loads(result)
 
             # Check for errors in v3 API response
             if "error" in j:
-                log.msg(
-                    f"VT: URL submission error - {j['error']['code']}: {j['error']['message']}"
+                self._log.info(
+                    "VT: URL submission error - {code}: {msg}",
+                    code=j["error"]["code"],
+                    msg=j["error"]["message"],
                 )
                 return
 
-            # Process successful submission response
+            # Process successful submission response. The response id is an
+            # analysis id; comment/collection want the v3 URL identifier
+            # (base64 of the URL with padding stripped), as in scanurl.
             if "data" in j:
                 data = j["data"]
-                url_id = data.get("id")
-                if url_id:
-                    log.msg("VT: URL submitted successfully for scanning")
-                    # Add to collection if enabled
+                if data.get("id"):
+                    self._log.info("VT: URL submitted successfully for scanning")
+                    url_id = (
+                        base64.urlsafe_b64encode(event["url"].encode())
+                        .decode()
+                        .rstrip("=")
+                    )
                     if self.collection_name:
                         self._add_to_collection("urls", url_id, f"URL {url_id}")
-                    # Post comment if enabled (this is a new URL submission)
                     if self.comment:
                         return self._post_comment("urls", url_id, "URL comment")
                 else:
-                    log.msg("VT: URL submission successful but no ID returned")
+                    self._log.info("VT: URL submission successful but no ID returned")
             else:
-                log.msg("VT: unexpected URL submission response format")
+                self._log.info("VT: unexpected URL submission response format")
 
         return self._make_request(
             b"POST",
@@ -546,23 +565,35 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT post{comment_type.lower()} result: {body_bytes}")
+                self._log.info(
+                    "VT post{comment_type} result: {body}",
+                    comment_type=comment_type.lower(),
+                    body=body_bytes,
+                )
             result = body_bytes.decode("utf8")
             j = json.loads(result)
 
             # Check for errors in v3 API response
             if "error" in j:
-                log.msg(
-                    f"VT: {comment_type} error - {j['error']['code']}: {j['error']['message']}"
+                self._log.info(
+                    "VT: {comment_type} error - {code}: {msg}",
+                    comment_type=comment_type,
+                    code=j["error"]["code"],
+                    msg=j["error"]["message"],
                 )
                 return False
 
             # Process successful comment response
             if "data" in j:
-                log.msg(f"VT: {comment_type} posted successfully")
+                self._log.info(
+                    "VT: {comment_type} posted successfully", comment_type=comment_type
+                )
                 return True
             else:
-                log.msg(f"VT: unexpected {comment_type.lower()} response format")
+                self._log.info(
+                    "VT: unexpected {comment_type} response format",
+                    comment_type=comment_type.lower(),
+                )
                 return False
 
         return self._make_request(
@@ -576,10 +607,49 @@ class Output(cowrie.core.output.Output):
 
     def _init_collection(self) -> None:
         """
-        Initialize collection - create if doesn't exist or get ID if exists
-        This is called during start() if collection is configured
+        Resolve the collection id: look up an existing collection with this name
+        and reuse it, otherwise create one. Called during start() if a
+        collection is configured.
+
+        Looking up by name first reuses the server-assigned id across restarts
+        (it is not derivable from the name) and avoids creating a duplicate
+        collection on every start.
         """
-        # Try to create the collection (it's idempotent - won't duplicate if exists)
+        query = quote(f"name:{self.collection_name} owner:me")
+        vtUrl = f"{VTAPI_URL}collections?filter={query}&limit=40".encode()
+        headers = self._build_headers()
+
+        def process_response(body_bytes):
+            if self.debug:
+                self._log.info("VT find collection result: {body}", body=body_bytes)
+            j = json.loads(body_bytes.decode("utf8"))
+            # The name filter may be loose, so match the name exactly.
+            if "error" not in j:
+                for item in j.get("data", []):
+                    attributes = item.get("attributes", {})
+                    if attributes.get("name") == self.collection_name and item.get(
+                        "id"
+                    ):
+                        self.collection_id = item["id"]
+                        self._log.info(
+                            "VT: Using existing collection '{collection}' with ID: {collection_id}",
+                            collection=self.collection_name,
+                            collection_id=item["id"],
+                        )
+                        return
+            # No existing collection found (or the search errored): create it.
+            self._create_collection()
+
+        self._make_request(
+            b"GET",
+            vtUrl,
+            headers,
+            process_response=process_response,
+            error_prefix="VT find collection",
+        )
+
+    def _create_collection(self) -> None:
+        """Create the configured collection and store its server-assigned id."""
         vtUrl = f"{VTAPI_URL}collections".encode()
         collection_data = {
             "data": {
@@ -595,39 +665,30 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT create collection result: {body_bytes}")
-            result = body_bytes.decode("utf8")
-            j = json.loads(result)
+                self._log.info("VT create collection result: {body}", body=body_bytes)
+            j = json.loads(body_bytes.decode("utf8"))
 
-            # Check for errors in v3 API response
             if "error" in j:
-                error_code = j["error"].get("code")
-                # AlreadyExistsError means collection exists - that's OK
-                if error_code == "AlreadyExistsError":
-                    log.msg(
-                        f"VT: Collection '{self.collection_name}' already exists - will use existing"
-                    )
-                    # We'll get the ID from the error details if available
-                    # Otherwise we'll get it on first add operation
-                else:
-                    log.msg(
-                        f"VT: Collection creation error - {j['error']['code']}: {j['error'].get('message', 'Unknown error')}"
-                    )
+                self._log.info(
+                    "VT: Collection creation error - {code}: {msg}",
+                    code=j["error"].get("code"),
+                    msg=j["error"].get("message", "Unknown error"),
+                )
                 return
 
-            # Process successful creation response
             if "data" in j:
-                data = j["data"]
-                collection_id = data.get("id")
+                collection_id = j["data"].get("id")
                 if collection_id:
                     self.collection_id = collection_id
-                    log.msg(
-                        f"VT: Collection '{self.collection_name}' created with ID: {collection_id}"
+                    self._log.info(
+                        "VT: Collection '{collection}' created with ID: {collection_id}",
+                        collection=self.collection_name,
+                        collection_id=collection_id,
                     )
                 else:
-                    log.msg("VT: Collection created but no ID returned")
+                    self._log.info("VT: Collection created but no ID returned")
             else:
-                log.msg("VT: unexpected collection creation response format")
+                self._log.info("VT: unexpected collection creation response format")
 
         self._make_request(
             b"POST",
@@ -652,8 +713,9 @@ class Output(cowrie.core.output.Output):
         if not self.collection_name or not self.collection_id:
             # Collection not configured or not initialized yet
             if self.debug and self.collection_name:
-                log.msg(
-                    f"VT: Cannot add {resource_descriptor} to collection - collection ID not yet available"
+                self._log.info(
+                    "VT: Cannot add {resource} to collection - collection ID not yet available",
+                    resource=resource_descriptor,
                 )
             return defer.succeed(None)
 
@@ -670,20 +732,24 @@ class Output(cowrie.core.output.Output):
 
         def process_response(body_bytes):
             if self.debug:
-                log.msg(f"VT add to collection result: {body_bytes}")
+                self._log.info("VT add to collection result: {body}", body=body_bytes)
             result = body_bytes.decode("utf8")
             j = json.loads(result)
 
             # Check for errors in v3 API response
             if "error" in j:
-                log.msg(
-                    f"VT: Add to collection error - {j['error']['code']}: {j['error'].get('message', 'Unknown error')}"
+                self._log.info(
+                    "VT: Add to collection error - {code}: {msg}",
+                    code=j["error"]["code"],
+                    msg=j["error"].get("message", "Unknown error"),
                 )
                 return False
 
             # Success
-            log.msg(
-                f"VT: Added {resource_descriptor} to collection '{self.collection_name}'"
+            self._log.info(
+                "VT: Added {resource} to collection '{collection}'",
+                resource=resource_descriptor,
+                collection=self.collection_name,
             )
             return True
 

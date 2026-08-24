@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 from cowrie.shell.command import HoneyPotCommand
@@ -28,9 +32,10 @@ For complete documentation, run: info coreutils 'env invocation'
 
 class Command_env(HoneyPotCommand):
     def call(self) -> None:
-        # This only show environ vars, not the shell vars. Need just to mimic real systems
-        for i in self.environ:
-            self.write(f"{i}={self.environ[i]}\n")
+        # env shows only exported variables, not plain shell variables
+        for name in self.environ:
+            if name in self.exported:
+                self.write(f"{name}={self.environ[name]}\n")
 
 
 commands["/usr/bin/env"] = Command_env

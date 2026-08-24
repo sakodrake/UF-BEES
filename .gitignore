@@ -27,3 +27,7 @@ _trial_temp
 .pydevproject
 .idea/
 .tox
+.coverage
+
+# nix build output
+/result

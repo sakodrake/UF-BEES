@@ -1,9 +1,11 @@
-# Copyright (c) 2018 Danilo Vargas <danilo.vargas@csiete.org>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2018 Danilo Vargas <danilo.vargas@csiete.org>
+# SPDX-FileCopyrightText: 2018-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
-import os
+import posixpath
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.fs import A_NAME
@@ -79,7 +81,7 @@ or available locally via: info '(coreutils) du invocation'\n"""
     def call(self) -> None:
         self.showHidden = False
         self.showDirectories = False
-        path = self.protocol.cwd
+        path = self.cwd
         args = self.args
         if args:
             if "-sh" == args[0]:
@@ -117,7 +119,7 @@ or available locally via: info '(coreutils) du invocation'\n"""
             return
         for filename in filenames:
             if showall:
-                isdir = self.protocol.fs.isdir(os.path.join(path, filename))
+                isdir = self.protocol.fs.isdir(posixpath.join(path, filename))
                 if isdir:
                     filename = f"4       ./{filename}\n"
                     self.write(filename)

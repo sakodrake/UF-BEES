@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import sqlite3
@@ -5,7 +9,7 @@ from typing import Any
 
 from twisted.enterprise import adbapi
 from twisted.internet import defer
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -16,6 +20,8 @@ class Output(cowrie.core.output.Output):
     sqlite output
     """
 
+    _log = Logger()
+
     db: Any
 
     def start(self):
@@ -23,26 +29,35 @@ class Output(cowrie.core.output.Output):
         Start sqlite3 logging module using Twisted ConnectionPool.
         Need to be started with check_same_thread=False. See
         https://twistedmatrix.com/trac/ticket/3629.
+
+        The pool holds a single connection: SQLite serializes writers at the
+        file level, so concurrent connections to one database file raise
+        "database is locked" instead of gaining throughput, and the
+        LAST_INSERT_ROWID() reads below only mean anything on the same
+        connection as the INSERT they follow.
         """
         sqliteFilename = CowrieConfig.get("output_sqlite", "db_file")
         try:
             self.db = adbapi.ConnectionPool(
-                "sqlite3", database=sqliteFilename, check_same_thread=False
+                "sqlite3",
+                database=sqliteFilename,
+                check_same_thread=False,
+                cp_min=1,
+                cp_max=1,
             )
+            self.db.start()
         except sqlite3.OperationalError as e:
-            log.msg(e)
-
-        self.db.start()
+            self._log.info("{error}", error=e)
 
     def stop(self):
         """
         Close connection to db
         """
-        self.db.close()
+        if hasattr(self, "db"):
+            self.db.close()
 
     def sqlerror(self, error):
-        log.err("sqlite error")
-        error.printTraceback()
+        self._log.failure("sqlite error", failure=error)
 
     def simpleQuery(self, sql, args):
         """
@@ -136,7 +151,32 @@ class Output(cowrie.core.output.Output):
             self.simpleQuery(
                 "INSERT INTO `downloads` (`session`, `timestamp`, `url`, `outfile`, `shasum`) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (event["session"], event["timestamp"], event["url"], "NULL", "NULL"),
+                (event["session"], event["timestamp"], event["url"], None, None),
+            )
+
+        elif event["eventid"] == "cowrie.session.file_upload":
+            self.simpleQuery(
+                "INSERT INTO `downloads` (`session`, `timestamp`, `url`, `outfile`, `shasum`) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    event["session"],
+                    event["timestamp"],
+                    "",
+                    event["outfile"],
+                    event["shasum"],
+                ),
+            )
+
+        elif event["eventid"] == "cowrie.session.input":
+            self.simpleQuery(
+                "INSERT INTO `input` (`session`, `timestamp`, `realm`, `input`) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    event["session"],
+                    event["timestamp"],
+                    event["realm"],
+                    event["input"],
+                ),
             )
 
         elif event["eventid"] == "cowrie.client.version":

@@ -1,11 +1,17 @@
+# SPDX-FileCopyrightText: 2019 Mehtab Zafar <mehtab.zafar98@gmail.com>
+# SPDX-FileCopyrightText: 2019-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import ipaddress
-from functools import lru_cache
+from collections import OrderedDict
+from typing import Any
 
 from twisted.internet import defer
+from twisted.logger import Logger
 from twisted.names import client, error
-from twisted.python import log
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -16,6 +22,8 @@ class Output(cowrie.core.output.Output):
     Output plugin used for reverse DNS lookup
     """
 
+    _log = Logger()
+
     timeout: list[int]
 
     def start(self):
@@ -23,6 +31,8 @@ class Output(cowrie.core.output.Output):
         Start Output Plugin
         """
         self.timeout = [CowrieConfig.getint("output_reversedns", "timeout", fallback=3)]
+        self.cache_size: int = 1000
+        self._cache: OrderedDict[str, Any] = OrderedDict()
 
     def stop(self):
         """
@@ -40,16 +50,17 @@ class Output(cowrie.core.output.Output):
             Create log messages for connect events
             """
             if result is None:
-                log.msg("reversedns: no results (1)")
+                self._log.info("reversedns: no results (1)")
                 return
             if len(result[0]) == 0:
-                log.msg("reversedns: no results (2)")
+                self._log.info("reversedns: no results (2)")
                 return
 
             payload = result[0][0].payload
-            log.msg(
+            self.dispatch(
                 eventid="cowrie.reversedns.connect",
                 session=event["session"],
+                protocol=event["protocol"],
                 format="reversedns: PTR record for IP %(src_ip)s is %(ptr)s"
                 " ttl=%(ttl)i",
                 src_ip=event["src_ip"],
@@ -64,9 +75,11 @@ class Output(cowrie.core.output.Output):
             if result is None:
                 return
             payload = result[0][0].payload
-            log.msg(
+            self.dispatch(
                 eventid="cowrie.reversedns.forward",
                 session=event["session"],
+                src_ip=event["src_ip"],
+                protocol=event["protocol"],
                 format="reversedns: PTR record for IP %(dst_ip)s is %(ptr)s"
                 " ttl=%(ttl)i",
                 dst_ip=event["dst_ip"],
@@ -76,16 +89,15 @@ class Output(cowrie.core.output.Output):
 
         def cbError(failure):
             if failure.type == defer.TimeoutError:
-                log.msg("reversedns: Timeout in DNS lookup")
+                self._log.info("reversedns: Timeout in DNS lookup")
             elif failure.type == error.DNSNameError:
                 # DNSNameError is the NXDOMAIN response
-                log.msg("reversedns: No PTR record returned")
+                self._log.info("reversedns: No PTR record returned")
             elif failure.type == error.DNSServerError:
                 # DNSServerError is the SERVFAIL response
-                log.msg("reversedns: DNS server not responding")
+                self._log.info("reversedns: DNS server not responding")
             else:
-                log.msg("reversedns: Error in DNS lookup")
-                failure.printTraceback()
+                self._log.failure("reversedns: Error in DNS lookup", failure=failure)
 
         if event["eventid"] == "cowrie.session.connect":
             d = self.reversedns(event["src_ip"])
@@ -98,10 +110,12 @@ class Output(cowrie.core.output.Output):
                 d.addCallback(processForward)
                 d.addErrback(cbError)
 
-    @lru_cache(maxsize=1000)
     def reversedns(self, addr):
         """
-        Perform a reverse DNS lookup on an IP
+        Perform a reverse DNS lookup on an IP, serving repeat lookups
+        from a bounded cache of resolved results. A Deferred is single
+        use, so the cache holds DNS answers (None for NXDOMAIN), never
+        the Deferred itself.
 
         Arguments:
             addr -- IPv4 Address
@@ -110,5 +124,31 @@ class Output(cowrie.core.output.Output):
             ptr = ipaddress.ip_address(addr).reverse_pointer
         except ValueError:
             return None
+        if addr in self._cache:
+            self._cache.move_to_end(addr)
+            return defer.succeed(self._cache[addr])
         d = client.lookupPointer(ptr, timeout=self.timeout)
+        d.addCallbacks(
+            self._cacheResult,
+            self._cacheFailure,
+            callbackArgs=(addr,),
+            errbackArgs=(addr,),
+        )
         return d
+
+    def _cacheResult(self, result, addr):
+        self._cacheStore(addr, result)
+        return result
+
+    def _cacheFailure(self, failure, addr):
+        # NXDOMAIN is a definitive answer worth caching; timeouts and
+        # SERVFAIL are transient, so the next connect retries the lookup.
+        if failure.check(error.DNSNameError):
+            self._cacheStore(addr, None)
+        return failure
+
+    def _cacheStore(self, addr, result):
+        self._cache[addr] = result
+        self._cache.move_to_end(addr)
+        while len(self._cache) > self.cache_size:
+            self._cache.popitem(last=False)

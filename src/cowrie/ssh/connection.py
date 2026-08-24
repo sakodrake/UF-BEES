@@ -1,30 +1,6 @@
-# Copyright (c) 2015 Michel Oosterhof <michel@oosterhof.net>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2015-2023 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 """
 This module contains connection code to work around issues with the
@@ -37,6 +13,7 @@ import struct
 
 from twisted.conch.ssh import common, connection
 from twisted.internet import defer
+from twisted.logger import Logger
 from twisted.python import log
 
 
@@ -46,8 +23,16 @@ class CowrieSSHConnection(connection.SSHConnection):
     Channel request for openshell needs to return success immediatly
     """
 
+    _log = Logger()
+
     def ssh_CHANNEL_REQUEST(self, packet):
         localChannel = struct.unpack(">L", packet[:4])[0]
+        if localChannel not in self.channels:
+            self._log.info(
+                "Ignoring CHANNEL_REQUEST for unknown channel {channel_id}",
+                channel_id=localChannel,
+            )
+            return None
         requestType, rest = common.getNS(packet[4:])
         wantReply = ord(rest[0:1])
         channel = self.channels[localChannel]
@@ -66,3 +51,39 @@ class CowrieSSHConnection(connection.SSHConnection):
             d.addCallback(self._cbChannelRequest, localChannel)
             d.addErrback(self._ebChannelRequest, localChannel)
         return d
+
+    # Some clients (observed: libssh2) send CHANNEL_EOF / CHANNEL_CLOSE /
+    # CHANNEL_WINDOW_ADJUST for a channel whose close handshake already
+    # completed, often alongside the final DISCONNECT. Twisted's handlers look
+    # the channel up unguarded and raise KeyError to the reactor; ignore the
+    # stale message instead.
+
+    def ssh_CHANNEL_EOF(self, packet):
+        localChannel = struct.unpack(">L", packet[:4])[0]
+        if localChannel not in self.channels:
+            self._log.info(
+                "Ignoring CHANNEL_EOF for unknown channel {channel_id}",
+                channel_id=localChannel,
+            )
+            return
+        connection.SSHConnection.ssh_CHANNEL_EOF(self, packet)
+
+    def ssh_CHANNEL_CLOSE(self, packet):
+        localChannel = struct.unpack(">L", packet[:4])[0]
+        if localChannel not in self.channels:
+            self._log.info(
+                "Ignoring CHANNEL_CLOSE for unknown channel {channel_id}",
+                channel_id=localChannel,
+            )
+            return
+        connection.SSHConnection.ssh_CHANNEL_CLOSE(self, packet)
+
+    def ssh_CHANNEL_WINDOW_ADJUST(self, packet):
+        localChannel = struct.unpack(">L", packet[:4])[0]
+        if localChannel not in self.channels:
+            self._log.info(
+                "Ignoring CHANNEL_WINDOW_ADJUST for unknown channel {channel_id}",
+                channel_id=localChannel,
+            )
+            return
+        connection.SSHConnection.ssh_CHANNEL_WINDOW_ADJUST(self, packet)

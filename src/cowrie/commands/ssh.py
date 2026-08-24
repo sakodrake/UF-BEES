@@ -1,5 +1,7 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2012 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2014-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import time
 from typing import TYPE_CHECKING
 
 from twisted.internet import reactor
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
 from cowrie.shell.command import HoneyPotCommand
@@ -38,6 +40,8 @@ class Command_ssh(HoneyPotCommand):
     """
     ssh
     """
+
+    _log = Logger()
 
     host: str
     callbacks: list[Callable]
@@ -99,7 +103,7 @@ class Command_ssh(HoneyPotCommand):
             )
 
         self.host = host
-        self.user = user
+        self.remote_user = user
 
         self.write(
             f"The authenticity of host '{self.host} ({self.ip})' \
@@ -117,11 +121,11 @@ class Command_ssh(HoneyPotCommand):
             f"Warning: Permanently added '{self.host}' (RSA) to the \
             list of known hosts.\n"
         )
-        self.write(f"{self.user}@{self.host}'s password: ")
+        self.write(f"{self.remote_user}@{self.host}'s password: ")
         self.protocol.password_input = True
 
     def wait(self, line: str) -> None:
-        reactor.callLater(2, self.finish, line)  # type: ignore[attr-defined]
+        reactor.callLater(2, self.finish, line)
 
     def finish(self, line: str) -> None:
         self.pause = False
@@ -131,9 +135,8 @@ class Command_ssh(HoneyPotCommand):
         else:
             host = "localhost"
         self.protocol.hostname = host
-        self.protocol.cwd = "/root"
-        if not self.fs.exists(self.protocol.cwd):
-            self.protocol.cwd = "/"
+        # The fake remote login lands the running shell in root's home there.
+        self.shell.cwd = "/root" if self.fs.exists("/root") else "/"
         self.protocol.password_input = False
         self.write(
             f"Linux {self.protocol.hostname} 2.6.26-2-686 #1 SMP Wed Nov 4 20:45:37 \
@@ -143,7 +146,7 @@ class Command_ssh(HoneyPotCommand):
         self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg("INPUT (ssh):", line)
+        self._log.info("INPUT (ssh): {line}", line=line)
         if len(self.callbacks):
             self.callbacks.pop(0)(line)
 

@@ -1,11 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 # ABOUTME: Emulates the GNU cut command for the honeypot shell.
 # ABOUTME: Supports field selection (-f), custom delimiters (-d), and suppress mode (-s).
 
 from __future__ import annotations
 
 import getopt
-
-from twisted.python import log
 
 from cowrie.shell.command import HoneyPotCommand
 
@@ -69,7 +71,7 @@ class Command_cut(HoneyPotCommand):
             self.exit()
         elif args:
             for arg in args:
-                pname = self.fs.resolve_path(arg, self.protocol.cwd)
+                pname = self.fs.resolve_path(arg, self.cwd)
                 try:
                     contents = self.fs.file_contents(pname)
                     self._process(contents)
@@ -121,15 +123,15 @@ class Command_cut(HoneyPotCommand):
             self.write(self.delimiter.join(selected) + "\n")
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="cut",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
         self._process(line.encode("utf-8"))
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
     def help(self) -> None:

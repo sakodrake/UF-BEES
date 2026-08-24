@@ -1,30 +1,8 @@
-# Copyright (c) 2016 Thomas Nicholson <tnnich@googlemail.com>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2016 Thomas Nicholson <tnnich@googlemail.com>
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -32,9 +10,10 @@ import hashlib
 import os
 
 from twisted.conch.ssh import filetransfer
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
+from cowrie.core.utils import escape_nonprintable
 from cowrie.ssh_proxy.protocols import base_protocol
 
 # PACKETLAYOUT = {
@@ -75,8 +54,9 @@ from cowrie.ssh_proxy.protocols import base_protocol
 
 
 class SFTP(base_protocol.BaseProtocol):
+    _log = Logger()
     prevID: int = 0
-    ID: int = 0
+    packetID: int = 0
     handle: bytes = b""
     path: bytes = b""
     command: bytes = b""
@@ -88,6 +68,7 @@ class SFTP(base_protocol.BaseProtocol):
     def __init__(self, uuid, chan_name, ssh):
         super().__init__(uuid, chan_name, ssh)
 
+        self.events = ssh.server.events
         self.downloadPath: str = CowrieConfig.get("honeypot", "download_path")
 
         self.clientPacket = base_protocol.BaseProtocol()
@@ -106,29 +87,24 @@ class SFTP(base_protocol.BaseProtocol):
         else:
             raise ValueError
 
-        if self.parentPacket.packetSize == 0:
-            self.parentPacket.packetSize = int(data[:4].hex(), 16) - len(data[4:])
-            data = data[4:]
-            self.parentPacket.data = data
-            data = b""
+        # An SFTP message is a 4-byte big-endian length followed by that many
+        # bytes. The channel splits and joins messages wherever it likes, so
+        # accumulate until a whole one is present and then take every whole
+        # message the buffer holds. Anything left over stays for the next call
+        # rather than being read as though it belonged to this message.
+        packet = self.parentPacket
+        packet.buffer += data
 
-        else:
-            if len(data) > self.parentPacket.packetSize:
-                self.parentPacket.data = (
-                    self.parentPacket.data + data[: self.parentPacket.packetSize]
-                )
-                data = data[self.parentPacket.packetSize :]
-                self.parentPacket.packetSize = 0
-            else:
-                self.parentPacket.packetSize -= len(data)
-                self.parentPacket.data = self.parentPacket.data + data
-                data = b""
+        while len(packet.buffer) >= 4:
+            length = int.from_bytes(packet.buffer[:4], byteorder="big")
+            if len(packet.buffer) - 4 < length:
+                # The body has not all arrived yet.
+                return
 
-        if self.parentPacket.packetSize == 0:
+            packet.data = packet.buffer[4 : 4 + length]
+            packet.packetSize = length
+            packet.buffer = packet.buffer[4 + length :]
             self.handle_packet(parent)
-
-        if len(data) != 0:
-            self.parse_packet(parent, data)
 
     def handle_packet(self, parent: str) -> None:
         self.packetSize: int = self.parentPacket.packetSize
@@ -137,8 +113,8 @@ class SFTP(base_protocol.BaseProtocol):
 
         sftp_num: int = self.extract_int(1)
 
-        self.prevID: int = self.ID
-        self.ID: int = self.extract_int(4)
+        self.prevID = self.packetID
+        self.packetID = self.extract_int(4)
 
         self.path: bytes = b""
 
@@ -148,7 +124,11 @@ class SFTP(base_protocol.BaseProtocol):
         elif sftp_num == filetransfer.FXP_REALPATH:
             self.path = self.extract_string()
             self.command = b"cd " + self.path
-            log.msg(parent + "[SFTP] Entered Command: " + self.command.decode())
+            self._log.info(
+                "{parent}[SFTP] Entered Command: {command}",
+                parent=parent,
+                command=escape_nonprintable(self.command),
+            )
 
         elif sftp_num == filetransfer.FXP_OPEN:
             self.path = self.extract_string()
@@ -161,12 +141,20 @@ class SFTP(base_protocol.BaseProtocol):
             elif pflags[7] == "1":
                 self.command = b"get " + self.path
             else:
-                # Unknown PFlag
-                log.msg(
-                    parent + f"[SFTP] New SFTP pflag detected: {pflags!r} {self.data!r}"
+                # Unknown PFlag: novel attacker behaviour, keep visible
+                # at the default log level.
+                self._log.info(
+                    "{parent}[SFTP] New SFTP pflag detected: {pflags!r} {data!r}",
+                    parent=parent,
+                    pflags=pflags,
+                    data=self.data,
                 )
 
-            log.msg(parent + " [SFTP] Entered Command: " + self.command.decode())
+            self._log.info(
+                "{parent} [SFTP] Entered Command: {command}",
+                parent=parent,
+                command=escape_nonprintable(self.command),
+            )
 
         elif sftp_num == filetransfer.FXP_READ:
             pass
@@ -177,7 +165,7 @@ class SFTP(base_protocol.BaseProtocol):
                 self.theFile = self.theFile[: self.offset] + self.extract_data()
 
         elif sftp_num == filetransfer.FXP_HANDLE:
-            if self.ID == self.prevID:
+            if self.packetID == self.prevID:
                 self.handle = self.extract_string()
 
         elif sftp_num == filetransfer.FXP_READDIR:
@@ -199,31 +187,44 @@ class SFTP(base_protocol.BaseProtocol):
             elif cmd == b"posix-rename@openssh.com":
                 self.command = b"mv " + self.path + b" " + self.extract_string()
             else:
-                # UNKNOWN COMMAND
-                log.msg(
-                    parent
-                    + f"[SFTP] New SFTP Extended Command detected: {cmd!r} {self.data!r}"
+                # UNKNOWN COMMAND: novel attacker behaviour, keep visible
+                # at the default log level.
+                self._log.info(
+                    "{parent}[SFTP] New SFTP Extended Command detected: {cmd!r} {data!r}",
+                    parent=parent,
+                    cmd=cmd,
+                    data=self.data,
                 )
 
         elif sftp_num == filetransfer.FXP_EXTENDED_REPLY:
-            log.msg(parent + " [SFTP] Entered Command: " + self.command.decode())
+            self._log.info(
+                "{parent} [SFTP] Entered Command: {command}",
+                parent=parent,
+                command=escape_nonprintable(self.command),
+            )
             # self.out.command_entered(self.uuid, self.command)
 
         elif sftp_num == filetransfer.FXP_CLOSE:
             if self.handle == self.extract_string():
                 if b"get" in self.command:
-                    log.msg(
-                        parent + " [SFTP] Finished Downloading: " + self.path.decode()
+                    self._log.info(
+                        "{parent} [SFTP] Finished Downloading: {path}",
+                        parent=parent,
+                        path=escape_nonprintable(self.path),
                     )
                 elif b"put" in self.command:
-                    log.msg(
-                        parent + " [SFTP] Finished Uploading: " + self.path.decode()
+                    self._log.info(
+                        "{parent} [SFTP] Finished Uploading: {path}",
+                        parent=parent,
+                        path=escape_nonprintable(self.path),
                     )
 
                     # TODO: should use artifact functions
                     shasum = hashlib.sha256(self.theFile).hexdigest()
                     outfile = os.path.join(self.downloadPath, shasum)
-                    fname = self.command.decode().split(" ")[-1]
+                    # The command line is client bytes and need not be valid
+                    # UTF-8.
+                    fname = self.command.decode(errors="replace").split(" ")[-1]
                     duplicate = os.path.exists(outfile)
 
                     if not duplicate:
@@ -231,16 +232,17 @@ class SFTP(base_protocol.BaseProtocol):
                         f.write(self.theFile)
                         f.close()
 
-                    log.msg(
-                        format='SFTP Uploaded file "%(filename)s" to %(outfile)s',
-                        eventid="cowrie.session.file_upload",
-                        filename=fname,
-                        duplicate=duplicate,
-                        url=fname,
-                        outfile=outfile,
-                        shasum=shasum,
-                        destfile=fname,
-                    )
+                    if self.events:
+                        self.events.dispatch(
+                            "cowrie.session.file_upload",
+                            'SFTP Uploaded file "%(filename)s" to %(outfile)s',
+                            filename=fname,
+                            duplicate=duplicate,
+                            url=fname,
+                            outfile=outfile,
+                            shasum=shasum,
+                            destfile=fname,
+                        )
 
                     # if self.out.cfg.getboolean(['download', 'passive']):
                     #     # self.out.make_downloads_folder()
@@ -266,24 +268,25 @@ class SFTP(base_protocol.BaseProtocol):
             self.command = b"rmdir " + self.extract_string()
 
         elif sftp_num == filetransfer.FXP_STATUS:
-            if self.ID == self.prevID:
+            if self.packetID == self.prevID:
                 code = self.extract_int(4)
                 if code in [0, 1]:
                     if b"get" not in self.command and b"put" not in self.command:
-                        log.msg(
-                            parent + " [SFTP] Entered Command: " + self.command.decode()
+                        self._log.info(
+                            "{parent} [SFTP] Entered Command: {command}",
+                            parent=parent,
+                            command=escape_nonprintable(self.command),
                         )
                 else:
-                    message = self.extract_string()
-                    log.msg(
-                        parent
-                        + " [SFTP] Failed Command: "
-                        + self.command.decode()
-                        + " Reason: "
-                        + message.decode()
+                    reason = self.extract_string()
+                    self._log.info(
+                        "{parent} [SFTP] Failed Command: {command} Reason: {reason}",
+                        parent=parent,
+                        command=escape_nonprintable(self.command),
+                        reason=escape_nonprintable(reason),
                     )
         else:
-            log.msg("[SFTP] Unhandled packet: {sftp_num}")
+            self._log.debug("[SFTP] Unhandled packet: {sftp_num}", sftp_num=sftp_num)
 
     def extract_attrs(self) -> bytes:
         cmd: str = ""

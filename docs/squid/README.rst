@@ -1,3 +1,8 @@
+.. SPDX-FileCopyrightText: 2018 Carter Yagemann
+.. SPDX-FileCopyrightText: 2018-2023 Michel Oosterhof <michel@oosterhof.net>
+..
+.. SPDX-License-Identifier: BSD-3-Clause
+
 Using TCP tunneling with Squid
 #################################
 
@@ -23,15 +28,16 @@ See ``squid.conf`` for an example configuration.
 Cowrie Configuration for Squid
 ==============================
 
-Uncomment and update the following entries to ``etc/cowrie.cfg`` under the SSH section::
+Uncomment and update the following entries in ``etc/cowrie.cfg`` under the SSH section::
 
     [ssh]
     forward_tunnel = true
     forward_tunnel_80 = 127.0.0.1:3128
     forward_tunnel_443 = 127.0.0.1:3128
 
-## Restart Cowrie
+Restart Cowrie
+==============
 
-Restart::
+Restart Cowrie from your honeypot state directory::
 
-    $ bin/cowrie restart
+    (cowrie-env) $ cowrie restart

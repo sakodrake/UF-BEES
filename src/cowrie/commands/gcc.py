@@ -1,21 +1,21 @@
-# Copyright (c) 2013 Bas Stottelaar <basstottelaar [AT] gmail [DOT] com>
+# SPDX-FileCopyrightText: 2013 Bas Stottelaar <basstottelaar [AT] gmail [DOT] com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 import getopt
-import os
 import random
-import re
-import time
 from typing import TYPE_CHECKING
 
 from twisted.internet import reactor
 
-from cowrie.core.config import CowrieConfig
+from cowrie.core.artifact import temp_download_path
 from cowrie.shell.command import HoneyPotCommand
 
 if TYPE_CHECKING:
-    from twisted.internet.defer import Deferred
+    from twisted.internet.interfaces import IDelayedCall
 
 commands = {}
 
@@ -54,7 +54,7 @@ class Command_gcc(HoneyPotCommand):
         b"\x01\x00\x00\x00"
     )
 
-    scheduled: Deferred
+    scheduled: IDelayedCall
 
     def call(self) -> None:
         """
@@ -120,7 +120,7 @@ class Command_gcc(HoneyPotCommand):
         # Check for *.c or *.cpp files
         for value in args:
             if ".c" in value.lower():
-                sourcefile = self.fs.resolve_path(value, self.protocol.cwd)
+                sourcefile = self.fs.resolve_path(value, self.cwd)
 
                 if self.fs.exists(sourcefile):
                     input_files = input_files + 1
@@ -135,7 +135,7 @@ class Command_gcc(HoneyPotCommand):
             timeout = 0.1 + random.random()
 
             # Schedule call to make it more time consuming and real
-            self.scheduled = reactor.callLater(  # type: ignore[attr-defined]
+            self.scheduled = reactor.callLater(
                 timeout, self.generate_file, (output_file if output_file else "a.out")
             )
         else:
@@ -187,15 +187,7 @@ gcc version {version} (Debian {version}-5)"""
     def generate_file(self, outfile: str) -> None:
         data = b""
         # TODO: make sure it is written to temp file, not downloads
-        tmp_fname = "{}_{}_{}_{}".format(
-            time.strftime("%Y%m%d%H%M%S"),
-            self.protocol.getProtoTransport().transportId,
-            self.protocol.terminal.transport.session.id,
-            re.sub("[^A-Za-z0-9]", "_", outfile),
-        )
-        safeoutfile = os.path.join(
-            CowrieConfig.get("honeypot", "download_path", fallback="."), tmp_fname
-        )
+        safeoutfile = temp_download_path("gcc")
 
         # Data contains random garbage from an actual file, so when
         # catting the file, you'll see some 'real' compiled data
@@ -210,11 +202,11 @@ gcc version {version} (Debian {version}-5)"""
             f.write(data)
 
         # Output file
-        outfile = self.fs.resolve_path(outfile, self.protocol.cwd)
+        outfile = self.fs.resolve_path(outfile, self.cwd)
 
         # Create file for the protocol
         self.fs.mkfile(
-            outfile, self.protocol.user.uid, self.protocol.user.gid, len(data), 33188
+            outfile, self.user["uid"], self.user["gid"], len(data), 33188
         )
         self.fs.update_realfile(self.fs.getfile(outfile), safeoutfile)
 

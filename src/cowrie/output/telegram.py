@@ -1,7 +1,12 @@
+# SPDX-FileCopyrightText: 2022 Louren van Garderen <mail@lourenvangarderen.nl>
+# SPDX-FileCopyrightText: 2023-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 # Simple Telegram Bot logger
 
 import treq
-from twisted.python import log
+from twisted.logger import Logger
 
 import cowrie.core.output
 from cowrie.core.config import CowrieConfig
@@ -11,6 +16,8 @@ class Output(cowrie.core.output.Output):
     """
     telegram output
     """
+
+    _log = Logger()
 
     def start(self):
         self.bot_token = CowrieConfig.get("output_telegram", "bot_token")
@@ -52,15 +59,22 @@ class Output(cowrie.core.output.Output):
             self.send_message(msgtxt)
 
     def send_message(self, message):
-        log.msg("Telegram plugin will try to call TelegramBot")
-        try:
-            treq.get(
-                "https://api.telegram.org/bot" + self.bot_token + "/sendMessage",
-                params=[
-                    ("chat_id", str(self.chat_id)),
-                    ("parse_mode", "HTML"),
-                    ("text", message),
-                ],
-            )
-        except Exception:
-            log.msg("Telegram plugin request error")
+        self._log.info("Telegram plugin will try to call TelegramBot")
+        # treq.get returns a Deferred; a network failure surfaces there, not as
+        # a synchronous exception, so it needs an errback rather than a
+        # try/except to avoid an unhandled Deferred error.
+        d = treq.get(
+            "https://api.telegram.org/bot" + self.bot_token + "/sendMessage",
+            params=[
+                ("chat_id", str(self.chat_id)),
+                ("parse_mode", "HTML"),
+                ("text", message),
+            ],
+            allow_redirects=False,
+        )
+        d.addErrback(self._request_failed)
+
+    def _request_failed(self, failure):
+        self._log.info(
+            "Telegram plugin request error: {error}", error=failure.getErrorMessage()
+        )

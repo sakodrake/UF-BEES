@@ -1,10 +1,15 @@
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2020-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import os
 import re
 import time
 
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.core import ttylog
 from cowrie.core.checkers import HoneypotPasswordChecker
@@ -37,6 +42,8 @@ def remove_all(original_string: bytes, remove_list: list[bytes]) -> bytes:
 
 
 class TelnetHandler:
+    _log = Logger()
+
     def __init__(self, server):
         # holds packet data; useful to manipulate it across functions as needed
         self.currentData: bytes = b""
@@ -123,15 +130,16 @@ class TelnetHandler:
                 False  # do not close again if function called after closing
             )
 
-            log.msg(
-                eventid="cowrie.log.closed",
-                format="Closing TTY Log: %(ttylog)s after %(duration)d seconds",
-                ttylog=shasumfile,
-                size=self.ttylogSize,
-                shasum=shasum,
-                duplicate=duplicate,
-                duration=time.time() - self.startTime,
-            )
+            if self.server.events:
+                self.server.events.dispatch(
+                    "cowrie.log.closed",
+                    "Closing TTY Log: %(ttylog)s after %(duration_ms)d milliseconds",
+                    ttylog=shasumfile,
+                    size=self.ttylogSize,
+                    shasum=shasum,
+                    duplicate=duplicate,
+                    duration_ms=round((time.time() - self.startTime) * 1000),
+                )
 
     def sendBackend(self, data: bytes) -> None:
         self.backend_buffer.append(data)
@@ -143,7 +151,9 @@ class TelnetHandler:
             self.client.transport.write(packet)
             # log raw packets if user sets so
             if CowrieConfig.getboolean("proxy", "log_raw", fallback=False):
-                log.msg("to_backend - " + data.decode("unicode-escape"))
+                self._log.info(
+                    "to_backend - {data}", data=data.decode("unicode-escape")
+                )
 
             if self.ttylogEnabled and self.authStarted:
                 cleanData = data.replace(
@@ -165,7 +175,7 @@ class TelnetHandler:
 
         # log raw packets if user sets so
         if CowrieConfig.getboolean("proxy", "log_raw", fallback=False):
-            log.msg("to_frontend - " + data.decode("unicode-escape"))
+            self._log.info("to_frontend - {data}", data=data.decode("unicode-escape"))
 
         if self.ttylogEnabled and self.authStarted:
             ttylog.ttylog_write(
@@ -207,11 +217,11 @@ class TelnetHandler:
 
             # check if a command has terminated
             if b"\r" in data:
-                if len(self.currentCommand) > 0:
-                    log.msg(
-                        eventid="cowrie.command.input",
+                if len(self.currentCommand) > 0 and self.server.events:
+                    self.server.events.dispatch(
+                        "cowrie.command.input",
+                        "CMD: %(input)s",
                         input=self.currentCommand,
-                        format="CMD: %(input)s",
                     )
                 self.currentCommand = b""
 
@@ -221,6 +231,16 @@ class TelnetHandler:
                 self.sendBackend(self.currentData)
             else:
                 self.sendFrontend(self.currentData)
+
+    def terminating_char(self) -> bytes:
+        """The byte the client sent after its CR, usually \\n or NUL.
+
+        There need not be one: a client may send a bare CR for Enter, or the
+        CR and its companion may land in separate reads. An empty result
+        forwards the bare CR to the backend as the client sent it.
+        """
+        after = self.currentData.index(b"\r") + 1
+        return self.currentData[after : after + 1]
 
     def processUsernameInput(self) -> None:
         self.sendData = False  # withold data until input is complete
@@ -238,14 +258,15 @@ class TelnetHandler:
 
         # check if done inputing
         if b"\r" in self.currentData:
-            terminatingChar = chr(
-                self.currentData[self.currentData.index(b"\r") + 1]
-            ).encode()  # usually \n or \x00
+            terminatingChar = self.terminating_char()
 
             # cleanup
             self.usernameState = process_backspaces(self.usernameState)
 
-            log.msg(f"User input login: {self.usernameState.decode('unicode-escape')}")
+            self._log.info(
+                "User input login: {username}",
+                username=self.usernameState.decode("unicode-escape"),
+            )
             self.inputingLogin = False
 
             # actually send to backend
@@ -268,15 +289,14 @@ class TelnetHandler:
 
         # check if done inputing
         if b"\r" in self.currentData:
-            terminatingChar = chr(
-                self.currentData[self.currentData.index(b"\r") + 1]
-            ).encode()  # usually \n or \x00
+            terminatingChar = self.terminating_char()
 
             # cleanup
             self.passwordState = process_backspaces(self.passwordState)
 
-            log.msg(
-                f"User input password: {self.passwordState.decode('unicode-escape')}"
+            self._log.info(
+                "User input password: {password}",
+                password=self.passwordState.decode("unicode-escape"),
             )
             self.inputingPassword = False
 
@@ -285,7 +305,7 @@ class TelnetHandler:
             # the login failed prompt
             src_ip = self.server.transport.getPeer().host
             if HoneypotPasswordChecker().checkUserPass(
-                self.usernameState, self.passwordState, src_ip
+                self.usernameState, self.passwordState, src_ip, self.server.events
             ):
                 passwordToSend = self.backendPassword
                 self.authDone = True
@@ -293,7 +313,7 @@ class TelnetHandler:
                     CowrieConfig.getint("honeypot", "idle_timeout", fallback=300)
                 )
             else:
-                log.msg("Sending invalid auth to backend")
+                self._log.info("Sending invalid auth to backend")
                 passwordToSend = self.backendPassword + b"fake"
 
             # actually send to backend
@@ -308,14 +328,14 @@ class TelnetHandler:
         """
         hasPassword = re.search(self.passwordPromptRegex, self.currentData)
         if hasPassword:
-            log.msg("Password prompt from backend")
+            self._log.info("Password prompt from backend")
             self.authStarted = True
             self.inputingPassword = True
             self.passwordState = b""
 
         hasLogin = re.search(self.usernamePromptRegex, self.currentData)
         if hasLogin:
-            log.msg("Login prompt from backend")
+            self._log.info("Login prompt from backend")
             self.authStarted = True
             self.inputingLogin = True
             self.usernameState = b""
@@ -332,24 +352,26 @@ class TelnetHandler:
         if hasNegotiationLogin:
             self.usernameState = hasNegotiationLogin.group(2)
             username_str = self.usernameState.decode("unicode-escape")
-            log.msg(
-                f"Detected username {username_str} in negotiation, spoofing for backend..."
+            self._log.info(
+                "Detected username {username} in negotiation, spoofing for backend...",
+                username=username_str,
             )
 
             # Log the environment variable for consistency with shell mode
-            log.msg(
-                eventid="cowrie.client.var",
-                format="Telnet NEW-ENVIRON: %(name)s=%(value)s",
-                name="USER",
-                value=username_str,
-            )
+            if self.server.events:
+                self.server.events.dispatch(
+                    "cowrie.client.var",
+                    "Telnet NEW-ENVIRON: %(name)s=%(value)s",
+                    name="USER",
+                    value=username_str,
+                )
 
             # CVE-2026-24061 detection: USER environment variable with -f flag
             # This exploit bypasses authentication in GNU inetutils telnetd <= 2.7
-            if username_str.startswith("-f"):
-                log.msg(
-                    eventid="cowrie.telnet.exploit_attempt",
-                    format="CVE-2026-24061 exploit attempt detected: USER=%(value)s",
+            if username_str.startswith("-f") and self.server.events:
+                self.server.events.dispatch(
+                    "cowrie.telnet.exploit_attempt",
+                    "CVE-2026-24061 exploit attempt detected: USER=%(value)s",
                     cve="CVE-2026-24061",
                     name="USER",
                     value=username_str,

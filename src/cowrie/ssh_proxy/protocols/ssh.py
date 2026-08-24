@@ -1,30 +1,8 @@
-# Copyright (c) 2016 Thomas Nicholson <tnnich@googlemail.com>
-# All rights reserved.
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2016 Thomas Nicholson <tnnich@googlemail.com>
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
 #
-# Redistribution and use in source and binary forms, with or without
-# modification, are permitted provided that the following conditions
-# are met:
-#
-# 1. Redistributions of source code must retain the above copyright
-#    notice, this list of conditions and the following disclaimer.
-# 2. Redistributions in binary form must reproduce the above copyright
-#    notice, this list of conditions and the following disclaimer in the
-#    documentation and/or other materials provided with the distribution.
-# 3. The names of the author(s) may not be used to endorse or promote
-#    products derived from this software without specific prior written
-#    permission.
-#
-# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS OR
-# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
-# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
-# IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY DIRECT, INDIRECT,
-# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
-# BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
-# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
-# AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-# OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-# SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -32,9 +10,10 @@ import uuid
 from typing import Any
 
 from twisted.conch.ssh import connection, transport, userauth
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.core.config import CowrieConfig
+from cowrie.core.utils import escape_nonprintable
 from cowrie.ssh_proxy.protocols import (
     base_protocol,
     exec_term,
@@ -91,6 +70,8 @@ PACKETLAYOUT = (
 
 
 class SSH(base_protocol.BaseProtocol):
+    _log = Logger()
+
     def __init__(self, server):
         super().__init__()
 
@@ -119,14 +100,13 @@ class SSH(base_protocol.BaseProtocol):
         else:
             direction = "BACKEND -> PROXY"
 
-        if self.log_raw:
-            log.msg(
-                eventid="cowrie.proxy.ssh",
-                format="%(direction)s - %(packet)s - %(payload)s",
+        if self.log_raw and self.server.events:
+            self.server.events.dispatch(
+                "cowrie.proxy.ssh",
+                "%(direction)s - %(packet)s - %(payload)s",
                 direction=direction,
                 packet=PACKETLAYOUT[message_num].ljust(37),
                 payload=repr(payload),
-                protocol="ssh",
             )
 
         if message_num == transport.MSG_SERVICE_REQUEST:
@@ -140,8 +120,10 @@ class SSH(base_protocol.BaseProtocol):
         elif message_num == transport.MSG_EXT_INFO:
             extensioncount: int = self.extract_int(4)
             for _ in range(extensioncount):
-                log.msg(
-                    f"SSH_MSG_EXT_INFO: {self.extract_string()!r}={self.extract_string()!r}"
+                self._log.debug(
+                    "SSH_MSG_EXT_INFO: {name!r}={value!r}",
+                    name=self.extract_string(),
+                    value=self.extract_string(),
                 )
             self.sendOn = False
 
@@ -166,7 +148,7 @@ class SSH(base_protocol.BaseProtocol):
             auth_list = self.extract_string()
 
             if b"publickey" in auth_list:
-                log.msg("[SSH] Detected Public Key Auth - Disabling!")
+                self._log.info("[SSH] Detected Public Key Auth - Disabling!")
                 payload = string_to_hex("password") + chr(0).encode()
                 # self.server.sendPacket(51, payload)
 
@@ -201,7 +183,9 @@ class SSH(base_protocol.BaseProtocol):
             channel_type = self.extract_string()
             channel_id = self.extract_int(4)
 
-            log.msg(f"got channel {channel_type!r} request")
+            self._log.debug(
+                "got channel {channel_type!r} request", channel_type=channel_type
+            )
 
             if channel_type == b"session":
                 # if using an interactive session reset frontend timeout
@@ -222,15 +206,16 @@ class SSH(base_protocol.BaseProtocol):
                 src_port = self.extract_int(4)
 
                 if CowrieConfig.getboolean("ssh", "forwarding"):
-                    log.msg(
-                        eventid="cowrie.direct-tcpip.request",
-                        format="direct-tcp connection request to %(dst_ip)s:%(dst_port)s "
-                        "from %(src_ip)s:%(src_port)s",
-                        dst_ip=dst_ip,
-                        dst_port=dst_port,
-                        src_ip=src_ip,
-                        src_port=src_port,
-                    )
+                    if self.server.events:
+                        self.server.events.dispatch(
+                            "cowrie.direct-tcpip.request",
+                            "direct-tcp connection request to %(dst_ip)s:%(dst_port)s "
+                            "from %(orig_ip)s:%(orig_port)s",
+                            dst_ip=dst_ip,
+                            dst_port=dst_port,
+                            orig_ip=src_ip,
+                            orig_port=src_port,
+                        )
 
                     the_uuid = uuid.uuid4().hex
                     self.create_channel(parent, channel_id, channel_type)
@@ -249,13 +234,16 @@ class SSH(base_protocol.BaseProtocol):
                     )
 
                 else:
-                    log.msg("[SSH] Detected Port Forwarding Channel - Disabling!")
-                    log.msg(
-                        eventid="cowrie.direct-tcpip.data",
-                        format="discarded direct-tcp forward request %(id)s to %(dst_ip)s:%(dst_port)s ",
-                        dst_ip=dst_ip,
-                        dst_port=dst_port,
+                    self._log.info(
+                        "[SSH] Detected Port Forwarding Channel - Disabling!"
                     )
+                    if self.server.events:
+                        self.server.events.dispatch(
+                            "cowrie.direct-tcpip.data",
+                            "discarded direct-tcp forward request %(id)s to %(dst_ip)s:%(dst_port)s ",
+                            dst_ip=dst_ip,
+                            dst_port=dst_port,
+                        )
 
                     self.sendOn = False
                     self.send_back(
@@ -269,7 +257,10 @@ class SSH(base_protocol.BaseProtocol):
             else:
                 # UNKNOWN CHANNEL TYPE
                 if channel_type not in [b"exit-status"]:
-                    log.msg(f"[SSH Unknown Channel Type Detected - {channel_type!r}")
+                    self._log.info(
+                        "[SSH Unknown Channel Type Detected - {channel_type!r}",
+                        channel_type=channel_type,
+                    )
 
         elif message_num == connection.MSG_CHANNEL_OPEN_CONFIRMATION:
             channel = self.get_channel(self.extract_int(4), parent)
@@ -297,7 +288,9 @@ class SSH(base_protocol.BaseProtocol):
                 channel["session"] = term.Term(
                     the_uuid, channel["name"], self, channel["clientID"]
                 )
-                log.msg(f"MSG_CHANNEL_REQUEST: {channel_type!r}")
+                self._log.debug(
+                    "MSG_CHANNEL_REQUEST: {channel_type!r}", channel_type=channel_type
+                )
 
             elif channel_type == b"exec":
                 channel["name"] = "[EXEC" + str(channel["serverID"]) + "]"
@@ -306,12 +299,20 @@ class SSH(base_protocol.BaseProtocol):
                 channel["session"] = exec_term.ExecTerm(
                     the_uuid, channel["name"], self, channel["serverID"], command
                 )
-                log.msg(f"MSG_CHANNEL_REQUEST: {channel_type!r}: {command!r}")
+                self._log.debug(
+                    "MSG_CHANNEL_REQUEST: {channel_type!r}: {command!r}",
+                    channel_type=channel_type,
+                    command=command,
+                )
 
             elif channel_type == b"subsystem":
                 self.extract_bool()
                 subsystem = self.extract_string()
-                log.msg(f"MSG_CHANNEL_REQUEST: {channel_type!r}: {subsystem!r}")
+                self._log.debug(
+                    "MSG_CHANNEL_REQUEST: {channel_type!r}: {subsystem!r}",
+                    channel_type=channel_type,
+                    subsystem=subsystem,
+                )
 
                 if subsystem == b"sftp":
                     if CowrieConfig.getboolean("ssh", "sftp_enabled"):
@@ -324,15 +325,26 @@ class SSH(base_protocol.BaseProtocol):
                         self.send_back(parent, 100, int_to_hex(channel["serverID"]))
                 else:
                     # UNKNOWN SUBSYSTEM
-                    log.msg(f"MSG_CHANNEL_REQUEST: {channel_type!r}: {subsystem!r}")
-                    log.msg(
-                        "[SSH] Unknown Subsystem Type Detected - " + subsystem.decode()
+                    self._log.debug(
+                        "MSG_CHANNEL_REQUEST: {channel_type!r}: {subsystem!r}",
+                        channel_type=channel_type,
+                        subsystem=subsystem,
+                    )
+                    self._log.info(
+                        "[SSH] Unknown Subsystem Type Detected - {subsystem}",
+                        subsystem=escape_nonprintable(subsystem),
                     )
             elif channel_type == b"env":
                 _ = self.extract_bool()
                 var = self.extract_string()
                 value = self.extract_string()
-                log.msg(f"MSG_CHANNEL_REQUEST: env: {var.decode()}={value.decode()}")
+                # Attacker-supplied environment variables are a signal,
+                # not protocol trace; keep visible at the default level.
+                self._log.info(
+                    "MSG_CHANNEL_REQUEST: env: {var}={value}",
+                    var=escape_nonprintable(var),
+                    value=escape_nonprintable(value),
+                )
 
             else:
                 # UNKNOWN CHANNEL REQUEST TYPE
@@ -342,8 +354,9 @@ class SSH(base_protocol.BaseProtocol):
                     b"exit-status",
                     b"exit-signal",
                 ]:
-                    log.msg(
-                        f"[SSH] Unknown Channel Request Type Detected - {channel_type.decode()}"
+                    self._log.info(
+                        "[SSH] Unknown Channel Request Type Detected - {channel_type}",
+                        channel_type=escape_nonprintable(channel_type),
                     )
 
         elif message_num == connection.MSG_CHANNEL_FAILURE:
@@ -357,7 +370,7 @@ class SSH(base_protocol.BaseProtocol):
             if "[SERVER]" in channel and "[CLIENT]" in channel:
                 # CHANNEL CLOSED
                 if channel["session"] is not None:
-                    log.msg("remote close")
+                    self._log.debug("remote close")
                     channel["session"].channel_closed()
 
                 self.channels.remove(channel)
@@ -379,9 +392,27 @@ class SSH(base_protocol.BaseProtocol):
                 if not CowrieConfig.getboolean("ssh", "forwarding"):
                     self.sendOn = False
                     self.send_back(parent, 82, b"")
+            elif channel_type == b"hostkeys-00@openssh.com":
+                # The backend advertises its host keys for OpenSSH host-key
+                # rotation (UpdateHostKeys). The proxy cannot relay this: the
+                # prove-ownership signatures are bound to the backend's session
+                # id, which differs from the frontend's, so the attacker's
+                # client reports "bad signature" for each host key. Drop the
+                # advertisement so rotation is never attempted.
+                self.sendOn = False
+            elif channel_type == b"hostkeys-prove-00@openssh.com":
+                # A client that still asks the server to prove key ownership:
+                # drop it and fail the request if a reply was expected, so the
+                # client does not wait on a proof the proxy cannot produce.
+                want_reply = self.extract_bool()
+                self.sendOn = False
+                if want_reply:
+                    self.send_back(parent, 82, b"")
 
         else:
-            log.msg(f"Unhandled SSH packet: {message_num}")
+            self._log.debug(
+                "Unhandled SSH packet: {message_num}", message_num=message_num
+            )
 
         if self.sendOn:
             if parent == "[SERVER]":
@@ -395,14 +426,14 @@ class SSH(base_protocol.BaseProtocol):
         else:
             direction = "PROXY -> BACKEND"
 
-            log.msg(
-                eventid="cowrie.proxy.ssh",
-                format="%(direction)s - %(packet)s - %(payload)s",
-                direction=direction,
-                packet=PACKETLAYOUT[message_num].ljust(37),
-                payload=repr(payload),
-                protocol="ssh",
-            )
+            if self.server.events:
+                self.server.events.dispatch(
+                    "cowrie.proxy.ssh",
+                    "%(direction)s - %(packet)s - %(payload)s",
+                    direction=direction,
+                    packet=PACKETLAYOUT[message_num].ljust(37),
+                    payload=repr(payload),
+                )
 
         if parent == "[SERVER]":
             self.server.sendPacket(message_num, payload)

@@ -1,5 +1,7 @@
-# Copyright (c) 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2021-2022 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -7,7 +9,7 @@ import os
 
 from twisted.internet import reactor
 from twisted.internet.endpoints import TCP4ClientEndpoint
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.pool_interface.client import PoolClientFactory
 
@@ -22,6 +24,8 @@ class PoolHandler:
     successful (initial_pool_connection_success), it issues an initialisation command to the server. Only after this
     command returns (initialisation_response) connections can use the pool.
     """
+
+    _log = Logger()
 
     def __init__(self, pool_host, pool_port, cowrie_plugin):
         # used for initialisation only
@@ -41,14 +45,14 @@ class PoolHandler:
         d.addErrback(self.initial_pool_connection_error)
 
     def initial_pool_connection_success(self, client):
-        log.msg("Initialising pool with Cowrie settings...")
+        self._log.info("Initialising pool with Cowrie settings...")
         # TODO get settings from config and send
 
         client.set_parent(self)
         client.send_initialisation()
 
     def initial_pool_connection_error(self, reason):
-        log.err(f"Could not connect to VM pool: {reason.value}")
+        self._log.error("Could not connect to VM pool: {reason}", reason=reason.value)
         os._exit(1)
 
     def initialisation_response(self, res_code):
@@ -56,11 +60,11 @@ class PoolHandler:
         When the pool's initialisation is successful, signal to the plugin that SSH and Telnet can be started.
         """
         if res_code == 0:
-            log.msg("VM pool fully initialised")
+            self._log.info("VM pool fully initialised")
             self.pool_ready = True
             self.cowrie_plugin.pool_ready()
         else:
-            log.err("VM pool could not initialise correctly!")
+            self._log.error("VM pool could not initialise correctly!")
             os._exit(1)
 
     def request_interface(self, initial_setup=False):

@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 
+# SPDX-FileCopyrightText: 2016-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 import getopt
 import json
 import os
@@ -69,7 +73,12 @@ def playlog(fd, settings):
                 #        causes mangling of the data due to
                 #        newlines being misinterpreted without
                 #        carriage returns.
-                data = data.replace(b"\n", b"\r\n").decode("UTF-8")
+                # A ttylog holds the raw bytes of a session: binary program
+                # output, odd escape sequences and pasted junk are all normal
+                # and need not be valid UTF-8. Decode lossily so one such byte
+                # does not abort the conversion of this log and every log
+                # still to come.
+                data = data.replace(b"\n", b"\r\n").decode("UTF-8", errors="replace")
 
                 thedata = [sleeptime, data]
                 thelog["duration"] += sleeptime

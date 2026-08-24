@@ -1,5 +1,7 @@
-# Copyright (c) 2016 Dave Germiquet
-# See LICENSE for details.
+# SPDX-FileCopyrightText: 2016 Dave Germiquet
+# SPDX-FileCopyrightText: 2016-2024 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 from __future__ import annotations
 
 import os
@@ -45,6 +47,18 @@ class ShellBaseCommandsTests(unittest.TestCase):  # TODO: ps, history
         self.proto.lineReceived(b"logout\n")
         self.assertEqual(self.tr.value(), b"")
 
+    def test_directory_as_command_reports_is_a_directory(self) -> None:
+        # Typing a directory path as a command must report "Is a directory"
+        # like bash, not crash the session. `/` resolves to an empty txtcmd
+        # path that pointed at the txtcmds directory itself and raised an
+        # uncaught IsADirectoryError, disconnecting the client.
+        self.proto.lineReceived(b"/\n")
+        self.assertEqual(self.tr.value(), b"-bash: /: Is a directory\n" + PROMPT)
+
+    def test_subdirectory_as_command_reports_is_a_directory(self) -> None:
+        self.proto.lineReceived(b"/bin\n")
+        self.assertEqual(self.tr.value(), b"-bash: /bin: Is a directory\n" + PROMPT)
+
     def test_clear_command(self) -> None:
         self.proto.lineReceived(b"clear\n")
         self.assertEqual(self.tr.value(), PROMPT)
@@ -74,16 +88,14 @@ class ShellBaseCommandsTests(unittest.TestCase):  # TODO: ps, history
         )
 
     def test_shutdown_command(self) -> None:
-        self.proto.lineReceived(b"shutdown\n")
-        self.assertEqual(
-            self.tr.value(), b"Try `shutdown --help' for more information.\n" + PROMPT
-        )  # TODO: Is it right?..
-
-    def test_poweroff_command(self) -> None:
-        self.proto.lineReceived(b"poweroff\n")
-        self.assertEqual(
-            self.tr.value(), b"Try `shutdown --help' for more information.\n" + PROMPT
-        )  # TODO: Is it right?..
+        for command in (b"shutdown", b"poweroff", b"halt"):
+            with self.subTest(command=command):
+                self.proto.lineReceived(command + b"\n")
+                self.assertEqual(
+                    self.tr.value(),
+                    b"Try `shutdown --help' for more information.\n" + PROMPT,
+                )  # TODO: Is it right?..
+                self.tr.clear()
 
     def test_date_command(self) -> None:
         self.proto.lineReceived(b"date\n")
@@ -110,16 +122,29 @@ class ShellBaseCommandsTests(unittest.TestCase):  # TODO: ps, history
         self.proto.lineReceived(b"php -v\n")
         self.assertEqual(self.tr.value(), Command_php.VERSION.encode() + PROMPT)
 
+    def test_run_directory_as_command(self) -> None:
+        self.proto.lineReceived(b"./\n")
+        self.assertEqual(self.tr.value(), b"-bash: ./: Is a directory\n" + PROMPT)
+
+    def test_run_nonexistent_command(self) -> None:
+        self.proto.lineReceived(b"definitelynotacommand\n")
+        self.assertEqual(
+            self.tr.value(),
+            b"-bash: definitelynotacommand: command not found\n" + PROMPT,
+        )
+
+    def test_run_nonexistent_path_command(self) -> None:
+        self.proto.lineReceived(b"./nope\n")
+        self.assertEqual(
+            self.tr.value(), b"-bash: ./nope: No such file or directory\n" + PROMPT
+        )
+
     def test_chattr_command(self) -> None:
         self.proto.lineReceived(b"chattr\n")
         self.assertEqual(
             self.tr.value(),
             b"Usage: chattr [-RVf] [-+=AacDdeijsSu] [-v version] files...\n"
             + PROMPT)
-
-    def test_umask_command(self) -> None:
-        self.proto.lineReceived(b"umask\n")
-        self.assertEqual(self.tr.value(), PROMPT)
 
     def test_set_command(self) -> None:
         self.proto.lineReceived(b"set\n")
@@ -135,50 +160,38 @@ class ShellBaseCommandsTests(unittest.TestCase):  # TODO: ps, history
 
     def test_export_command(self) -> None:
         self.proto.lineReceived(b"export\n")
-        self.assertEqual(self.tr.value(), PROMPT)
+        self.assertEqual(
+            self.tr.value(),
+            b'declare -x HOME="/root"\n'
+            b'declare -x LOGNAME="root"\n'
+            b'declare -x PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
+            b'declare -x TMOUT="1800"\n'
+            b'declare -x USER="root"\n' + PROMPT,
+        )
 
-    def test_alias_command(self) -> None:
-        self.proto.lineReceived(b"alias\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_jobs_command(self) -> None:
-        self.proto.lineReceived(b"jobs\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_kill_command(self) -> None:
-        self.proto.lineReceived(b"/bin/kill\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_pkill_command(self) -> None:
-        self.proto.lineReceived(b"/bin/pkill\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_killall_command(self) -> None:
-        self.proto.lineReceived(b"/bin/killall\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_killall5_command(self) -> None:
-        self.proto.lineReceived(b"/bin/killall5\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_su_command(self) -> None:
-        self.proto.lineReceived(b"su\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_chown_command(self) -> None:
-        self.proto.lineReceived(b"chown\n")
-        self.assertEqual(self.tr.value(), PROMPT)
-
-    def test_chgrp_command(self) -> None:
-        self.proto.lineReceived(b"chgrp\n")
-        self.assertEqual(self.tr.value(), PROMPT)
+    def test_nop_commands(self) -> None:
+        for command in (
+            b"umask",
+            b"alias",
+            b"jobs",
+            b"/bin/kill",
+            b"/bin/pkill",
+            b"/bin/killall",
+            b"/bin/killall5",
+            b"chown",
+            b"chgrp",
+        ):
+            with self.subTest(command=command):
+                self.proto.lineReceived(command + b"\n")
+                self.assertEqual(self.tr.value(), PROMPT)
+                self.tr.clear()
 
     def test_cd_output(self) -> None:
         path = "/usr/bin"
 
         self.proto.lineReceived(f"cd {path:s}".encode())
         self.assertEqual(self.tr.value(), PROMPT.replace(b"~", path.encode()))
-        self.assertEqual(self.proto.cwd, path)
+        self.assertEqual(self.proto.cmdstack[0].cwd, path)
 
     def test_cd_error_output(self) -> None:
         self.proto.lineReceived(f"cd {NONEXISTEN_FILE:s}".encode())
@@ -228,7 +241,7 @@ class ShellFileCommandsTests(unittest.TestCase):
         self.assertEqual(self.tr.value(), b"\n".join(lines) + PROMPT)
 
     def test_rm_output(self) -> None:
-        self.proto.lineReceived(b"rm /usr/bin/gcc\n")
+        self.proto.lineReceived(b"rm /usr/bin/sed\n")
         self.assertEqual(self.tr.value(), PROMPT)
 
     def test_rm_error_output(self) -> None:  # TODO: quotes?..
@@ -240,7 +253,7 @@ class ShellFileCommandsTests(unittest.TestCase):
         )
 
     def test_cp_output(self) -> None:
-        self.proto.lineReceived(b"cp /usr/bin/gcc /tmp\n")
+        self.proto.lineReceived(b"cp /usr/bin/sed /tmp\n")
         self.assertEqual(self.tr.value(), PROMPT)
 
     def test_cp_error_output(self) -> None:  # TODO: quotes?..
@@ -300,7 +313,9 @@ class ShellFileCommandsTests(unittest.TestCase):
 
     def test_pwd_output(self) -> None:
         self.proto.lineReceived(b"pwd\n")
-        self.assertEqual(self.tr.value(), self.proto.cwd.encode() + b"\n" + PROMPT)
+        self.assertEqual(
+            self.tr.value(), self.proto.cmdstack[0].cwd.encode() + b"\n" + PROMPT
+        )
 
     def test_touch_output(self) -> None:
         path = "/tmp/test.txt"

@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: 2018 Dave Germiquet <davegermiquet@trulycanadian.net>
+# SPDX-FileCopyrightText: 2018-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
+
 from __future__ import annotations
 
 import json
@@ -5,7 +10,7 @@ import string
 from random import choice
 
 from twisted.application import service
-from twisted.python import log
+from twisted.logger import Logger
 from twisted.words.protocols.jabber import jid
 from twisted.words.protocols.jabber.jid import JID
 from wokkel import muc
@@ -17,13 +22,15 @@ from cowrie.core.config import CowrieConfig
 
 
 class XMPPLoggerProtocol(muc.MUCClient):  # type: ignore
+    _log = Logger()
+
     def __init__(self, rooms, server, nick):
         muc.MUCClient.__init__(self)
         self.server = rooms.host
         self.jrooms = rooms
         self._roomOccupantMap = {}
-        log.msg(rooms.user)
-        log.msg(rooms.host)
+        self._log.info("{user}", user=rooms.user)
+        self._log.info("{host}", host=rooms.host)
         self.nick = nick
         self.last = {}
         self.activity = None
@@ -35,16 +42,16 @@ class XMPPLoggerProtocol(muc.MUCClient):  # type: ignore
         self.join(self.jrooms, self.nick)
 
     def joinedRoom(self, room):
-        log.msg(f"Joined room {room.name}")
+        self._log.info("Joined room {room}", room=room.name)
 
     def connectionMade(self):
-        log.msg("Connected!")
+        self._log.info("Connected!")
 
         # send initial presence
         self.send(AvailablePresence())
 
     def connectionLost(self, reason):
-        log.msg("Disconnected!")
+        self._log.info("Disconnected!")
 
     def onMessage(self, msg):
         pass
@@ -66,7 +73,7 @@ class Output(cowrie.core.output.Output):
         user = CowrieConfig.get("output_xmpp", "user")
         password = CowrieConfig.get("output_xmpp", "password")
         muc = CowrieConfig.get("output_xmpp", "muc")
-        resource = "".join([choice(string.ascii_letters) for i in range(8)])
+        resource = "".join([choice(string.ascii_letters) for _ in range(8)])
         jidstr = user + "/" + resource
         application = service.Application("honeypot")
         self.run(application, jidstr, password, JID(None, [muc, server, None]), server)

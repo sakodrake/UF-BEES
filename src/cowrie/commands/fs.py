@@ -1,5 +1,7 @@
-# Copyright (c) 2010 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2011 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 
 """
@@ -11,10 +13,9 @@ from __future__ import annotations
 import copy
 import getopt
 import os.path
+import posixpath
 import re
 from typing import TYPE_CHECKING
-
-from twisted.python import log
 
 from cowrie.shell import fs
 from cowrie.shell.command import HoneyPotCommand
@@ -30,6 +31,9 @@ class Command_grep(HoneyPotCommand):
     grep command
     """
 
+    interactive: bool = False
+    matched: bool = False
+
     def grep_get_contents(self, filename: str, match: str) -> None:
         try:
             contents = self.fs.file_contents(filename)
@@ -37,12 +41,15 @@ class Command_grep(HoneyPotCommand):
         except Exception:
             self.errorWrite(f"grep: {filename}: No such file or directory\n")
 
-    def grep_application(self, contents: bytes, match: str) -> None:
+    def compile_match(self, match: str) -> re.Pattern[bytes]:
         bmatch = os.path.basename(match).replace('"', "").encode("utf8")
-        matches = re.compile(bmatch)
-        contentsplit = contents.split(b"\n")
-        for line in contentsplit:
-            if matches.search(line):
+        return re.compile(bmatch)
+
+    def grep_application(self, contents: bytes, match: str) -> None:
+        matcher = self.compile_match(match)
+        for line in contents.split(b"\n"):
+            if matcher.search(line):
+                self.matched = True
                 self.writeBytes(line + b"\n")
 
     def help(self) -> None:
@@ -63,53 +70,84 @@ class Command_grep(HoneyPotCommand):
             self.exit()
             return
 
-        self.n = 10
-        if self.args[0] == ">":
-            pass
-        else:
-            try:
-                optlist, args = getopt.getopt(
-                    self.args,
-                    "abcDEFGHhIiJLlmnOoPqRSsUVvwxZA:B:C:e:f:",
-                    [
-                        "binary-files=",
-                        "color=",
-                        "color",
-                        "context=",
-                        "directories=",
-                        "label",
-                        "line-buffered",
-                    ],
-                )
-            except getopt.GetoptError as err:
-                self.errorWrite(f"grep: invalid option -- {err.opt}\n")
+        try:
+            optlist, args = getopt.getopt(
+                self.args,
+                "abcDEFGHhIiJLlmnOoPqRSsUVvwxZA:B:C:e:f:",
+                [
+                    "binary-files=",
+                    "color=",
+                    "color",
+                    "context=",
+                    "directories=",
+                    "label",
+                    "line-buffered",
+                ],
+            )
+        except getopt.GetoptError as err:
+            self.errorWrite(f"grep: invalid option -- {err.opt}\n")
+            self.help()
+            self.exit()
+            return
+
+        for opt, _arg in optlist:
+            if opt == "-h":
                 self.help()
-                self.exit()
-                return
 
-            for opt, _arg in optlist:
-                if opt == "-h":
-                    self.help()
+        if not args:
+            # Options only, no pattern (e.g. `grep -h`).
+            self.exit()
+            return
 
-        if not self.input_data:
-            files = self.check_arguments("grep", args[1:])
-            for pname in files:
-                self.grep_get_contents(pname, args[0])
+        self.match = args[0]
+
+        # grep validates the pattern before it reads any input, so a malformed
+        # one is reported once rather than per file or per line of stdin.
+        try:
+            self.compile_match(self.match)
+        except re.error:
+            self.errorWrite("grep: Invalid regular expression\n")
+            self.exit(2)
+            return
+
+        files = args[1:]
+
+        if self.input_data is not None:
+            self.grep_application(self.input_data, self.match)
+        elif files:
+            for pname in self.check_arguments("grep", files):
+                self.grep_get_contents(pname, self.match)
         else:
-            self.grep_application(self.input_data, args[0])
+            # No file and no pipe: read stdin until EOF.
+            self.interactive = True
+            return
 
-        self.exit()
+        self.exit(0 if self.matched else 1)
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="grep",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
+        if self.interactive:
+            self.grep_application(line.encode("utf8"), self.match)
 
-    def handle_CTRL_D(self) -> None:
-        self.exit()
+    def eofReceived(self) -> None:
+        if self.interactive:
+            terminal = self.protocol.terminal
+            if (
+                getattr(terminal, "stdinlogOpen", False)
+                and getattr(terminal, "stdinlogFile", "")
+                and os.path.exists(terminal.stdinlogFile)
+            ):
+                # Live exec-channel stdin (e.g. `grep foo < file` over an ssh
+                # exec): the bytes were streamed to the stdin log rather than
+                # arriving via lineReceived, so match against them now.
+                with open(terminal.stdinlogFile, "rb") as f:
+                    self.grep_application(f.read(), self.match)
+        self.exit(0 if self.matched else 1)
 
 
 commands["/bin/grep"] = Command_grep
@@ -173,14 +211,14 @@ class Command_tail(HoneyPotCommand):
         self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="tail",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 
@@ -250,14 +288,14 @@ class Command_head(HoneyPotCommand):
         self.exit()
 
     def lineReceived(self, line: str) -> None:
-        log.msg(
-            eventid="cowrie.command.input",
+        self.protocol.events.dispatch(
+            "cowrie.command.input",
+            "INPUT (%(realm)s): %(input)s",
             realm="head",
             input=line,
-            format="INPUT (%(realm)s): %(input)s",
         )
 
-    def handle_CTRL_D(self) -> None:
+    def eofReceived(self) -> None:
         self.exit()
 
 
@@ -273,11 +311,12 @@ class Command_cd(HoneyPotCommand):
 
     def call(self) -> None:
         if not self.args or self.args[0] == "~":
-            pname = self.protocol.user.avatar.home
+            pname = self.user["home"]
         else:
             pname = self.args[0]
+        newpath = ""
         try:
-            newpath = self.fs.resolve_path(pname, self.protocol.cwd)
+            newpath = self.fs.resolve_path(pname, self.cwd)
             inode = self.fs.getfile(newpath)
         except Exception:
             inode = None
@@ -290,7 +329,9 @@ class Command_cd(HoneyPotCommand):
         if inode[fs.A_TYPE] != fs.T_DIR:
             self.errorWrite(f"bash: cd: {pname}: Not a directory\n")
             return
-        self.protocol.cwd = newpath
+        # cd is a builtin: it changes the running shell's directory, not this
+        # command process's own.
+        self.shell.cwd = newpath
 
 
 commands["cd"] = Command_cd
@@ -376,32 +417,25 @@ or available locally via: info '(coreutils) rm invocation'\n"""
                 return
 
         for f in args:
-            pname = self.fs.resolve_path(f, self.protocol.cwd)
-            try:
-                # verify path to file exists
-                directory = self.fs.get_path("/".join(pname.split("/")[:-1]))
-                # verify that the file itself exists
-                self.fs.get_path(pname)
-            except (IndexError, fs.FileNotFound):
+            pname = self.fs.resolve_path(f, self.cwd)
+            node = self.fs.getfile(pname, follow_symlinks=False)
+            if node is None:
                 if not force:
                     self.errorWrite(
                         f"rm: cannot remove `{f}': No such file or directory\n"
                     )
                 continue
-            basename = pname.split("/")[-1]
-            for i in directory[:]:
-                if i[fs.A_NAME] == basename:
-                    if i[fs.A_TYPE] == fs.T_DIR and not recursive:
-                        self.errorWrite(
-                            f"rm: cannot remove `{i[fs.A_NAME]}': Is a directory\n"
-                        )
-                    else:
-                        directory.remove(i)
-                        if verbose:
-                            if i[fs.A_TYPE] == fs.T_DIR:
-                                self.write(f"removed directory '{i[fs.A_NAME]}'\n")
-                            else:
-                                self.write(f"removed '{i[fs.A_NAME]}'\n")
+            if node[fs.A_TYPE] == fs.T_DIR and not recursive:
+                self.errorWrite(
+                    f"rm: cannot remove `{node[fs.A_NAME]}': Is a directory\n"
+                )
+                continue
+            self.fs.remove(pname)
+            if verbose:
+                if node[fs.A_TYPE] == fs.T_DIR:
+                    self.write(f"removed directory '{node[fs.A_NAME]}'\n")
+                else:
+                    self.write(f"removed '{node[fs.A_NAME]}'\n")
 
 
 commands["/bin/rm"] = Command_rm
@@ -429,7 +463,7 @@ class Command_cp(HoneyPotCommand):
                 recursive = True
 
         def resolv(pname: str) -> str:
-            rsv: str = self.fs.resolve_path(pname, self.protocol.cwd)
+            rsv: str = self.fs.resolve_path(pname, self.cwd)
             return rsv
 
         if len(args) < 2:
@@ -453,7 +487,7 @@ class Command_cp(HoneyPotCommand):
             isdir = True
         else:
             isdir = False
-            parent = os.path.dirname(resolv(dest))
+            parent = posixpath.dirname(resolv(dest))
             if not self.fs.exists(parent):
                 self.errorWrite(
                     "cp: cannot create regular file "
@@ -470,15 +504,13 @@ class Command_cp(HoneyPotCommand):
                 continue
             s = copy.deepcopy(self.fs.getfile(resolv(src)))
             if isdir:
-                directory = self.fs.get_path(resolv(dest))
-                outfile = os.path.basename(src)
+                destdir = resolv(dest)
+                outfile = posixpath.basename(src)
             else:
-                directory = self.fs.get_path(os.path.dirname(resolv(dest)))
-                outfile = os.path.basename(dest.rstrip("/"))
-            if outfile in [x[fs.A_NAME] for x in directory]:
-                directory.remove(next(x for x in directory if x[fs.A_NAME] == outfile))
+                destdir = posixpath.dirname(resolv(dest))
+                outfile = posixpath.basename(dest.rstrip("/"))
             s[fs.A_NAME] = outfile
-            directory.append(s)
+            self.fs.link_entry(s, destdir)
 
 
 commands["/bin/cp"] = Command_cp
@@ -503,7 +535,7 @@ class Command_mv(HoneyPotCommand):
             return
 
         def resolv(pname: str) -> str:
-            rsv: str = self.fs.resolve_path(pname, self.protocol.cwd)
+            rsv: str = self.fs.resolve_path(pname, self.cwd)
             return rsv
 
         if len(args) < 2:
@@ -527,7 +559,7 @@ class Command_mv(HoneyPotCommand):
             isdir = True
         else:
             isdir = False
-            parent = os.path.dirname(resolv(dest))
+            parent = posixpath.dirname(resolv(dest))
             if not self.fs.exists(parent):
                 self.errorWrite(
                     "mv: cannot create regular file "
@@ -536,23 +568,15 @@ class Command_mv(HoneyPotCommand):
                 return
 
         for src in sources:
-            if not self.fs.exists(resolv(src)):
+            srcpath = resolv(src)
+            if not self.fs.exists(srcpath):
                 self.errorWrite(f"mv: cannot stat `{src}': No such file or directory\n")
                 continue
-            s = self.fs.getfile(resolv(src))
             if isdir:
-                directory = self.fs.get_path(resolv(dest))
-                outfile = os.path.basename(src)
+                destpath = posixpath.join(resolv(dest), posixpath.basename(src))
             else:
-                directory = self.fs.get_path(os.path.dirname(resolv(dest)))
-                outfile = os.path.basename(dest)
-            if directory != os.path.dirname(resolv(src)):
-                s[fs.A_NAME] = outfile
-                directory.append(s)
-                sdir = self.fs.get_path(os.path.dirname(resolv(src)))
-                sdir.remove(s)
-            else:
-                s[fs.A_NAME] = outfile
+                destpath = resolv(dest)
+            self.fs.rename(srcpath, destpath)
 
 
 commands["/bin/mv"] = Command_mv
@@ -566,19 +590,20 @@ class Command_mkdir(HoneyPotCommand):
 
     def call(self) -> None:
         for f in self.args:
-            pname = self.fs.resolve_path(f, self.protocol.cwd)
+            pname = self.fs.resolve_path(f, self.cwd)
             if self.fs.exists(pname):
                 self.errorWrite(f"mkdir: cannot create directory `{f}': File exists\n")
-                return
+                continue
             try:
-                self.fs.mkdir(
-                    pname, self.protocol.user.uid, self.protocol.user.gid, 4096, 16877
-                )
+                self.fs.mkdir(pname, self.user["uid"], self.user["gid"], 4096, 16877)
             except fs.FileNotFound:
                 self.errorWrite(
                     f"mkdir: cannot create directory `{f}': No such file or directory\n"
                 )
-            return
+            except OSError as e:
+                self.errorWrite(
+                    f"mkdir: cannot create directory `{f}': {e.strerror}\n"
+                )
 
 
 commands["/bin/mkdir"] = Command_mkdir
@@ -592,7 +617,7 @@ class Command_rmdir(HoneyPotCommand):
 
     def call(self) -> None:
         for f in self.args:
-            pname = self.fs.resolve_path(f, self.protocol.cwd)
+            pname = self.fs.resolve_path(f, self.cwd)
             try:
                 if len(self.fs.get_path(pname)):
                     self.errorWrite(
@@ -602,7 +627,7 @@ class Command_rmdir(HoneyPotCommand):
                 directory = self.fs.get_path("/".join(pname.split("/")[:-1]))
             except (IndexError, fs.FileNotFound):
                 directory = None
-            fname = os.path.basename(f)
+            fname = posixpath.basename(f)
             if not directory or fname not in [x[fs.A_NAME] for x in directory]:
                 self.errorWrite(
                     f"rmdir: failed to remove `{f}': No such file or directory\n"
@@ -629,7 +654,7 @@ class Command_pwd(HoneyPotCommand):
     """
 
     def call(self) -> None:
-        self.write(self.protocol.cwd + "\n")
+        self.write(self.cwd + "\n")
 
 
 commands["/bin/pwd"] = Command_pwd
@@ -647,8 +672,8 @@ class Command_touch(HoneyPotCommand):
             self.errorWrite("Try `touch --help' for more information.\n")
             return
         for f in self.args:
-            pname = self.fs.resolve_path(f, self.protocol.cwd)
-            if not self.fs.exists(os.path.dirname(pname)):
+            pname = self.fs.resolve_path(f, self.cwd)
+            if not self.fs.exists(posixpath.dirname(pname)):
                 self.errorWrite(
                     f"touch: cannot touch `{pname}`: No such file or directory\n"
                 )
@@ -661,9 +686,7 @@ class Command_touch(HoneyPotCommand):
                 self.errorWrite(f"touch: cannot touch `{pname}`: Permission denied\n")
                 return
 
-            self.fs.mkfile(
-                pname, self.protocol.user.uid, self.protocol.user.gid, 0, 33188
-            )
+            self.fs.mkfile(pname, self.user["uid"], self.user["gid"], 0, 33188)
 
 
 commands["/bin/touch"] = Command_touch

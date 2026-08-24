@@ -1,15 +1,45 @@
-# Copyright (c) 2009-2014 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2014 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2015-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
 from twisted.conch.interfaces import ISession
-from twisted.conch.ssh import session
-from twisted.python import log
+from twisted.internet.protocol import connectionDone
 from zope.interface import implementer
 
 from cowrie.insults import insults
 from cowrie.shell import protocol
+
+
+class ProtocolTransport:
+    """Adapt a terminal protocol so the SSH session can drive it as its
+    process transport, firing the protocol's connectionLost exactly once.
+
+    The session machinery calls loseConnection more than once per close
+    (from both SSHSession.loseConnection and SSHSession.closed), so the close
+    is guarded to deliver connectionLost a single time.
+    """
+
+    def __init__(self, proto):
+        self.proto = proto
+        self._lost = False
+
+    def dataReceived(self, data: bytes) -> None:
+        self.proto.transport.write(data)
+
+    def write(self, data: bytes) -> None:
+        self.proto.dataReceived(data)
+
+    def writeSequence(self, seq: list[bytes]) -> None:
+        self.write(b"".join(seq))
+
+    def loseConnection(self) -> None:
+        if self._lost:
+            return
+        self._lost = True
+        self.proto.connectionLost(connectionDone)
 
 
 @implementer(ISession)
@@ -56,15 +86,17 @@ class SSHSessionForCowrieUser:
             protocol.HoneyPotInteractiveProtocol, self
         )
         self.protocol.makeConnection(processprotocol)
-        processprotocol.makeConnection(session.wrapProtocol(self.protocol))
+        processprotocol.makeConnection(ProtocolTransport(self.protocol))
 
     def getPty(self, terminal, windowSize, attrs):
-        self.environ["TERM"] = terminal.decode("utf-8")
-        log.msg(
-            eventid="cowrie.client.size",
+        # The terminal type is attacker input from the pty request and need
+        # not be valid UTF-8.
+        self.environ["TERM"] = terminal.decode("utf-8", errors="replace")
+        self.avatar.conn.transport.events.dispatch(
+            "cowrie.client.size",
+            "Terminal Size: %(width)s %(height)s",
             width=windowSize[1],
             height=windowSize[0],
-            format="Terminal Size: %(width)s %(height)s",
         )
         self.windowSize = windowSize
 
@@ -73,16 +105,15 @@ class SSHSessionForCowrieUser:
             protocol.HoneyPotExecProtocol, self, cmd
         )
         self.protocol.makeConnection(processprotocol)
-        processprotocol.makeConnection(session.wrapProtocol(self.protocol))
+        processprotocol.makeConnection(ProtocolTransport(self.protocol))
 
     def closed(self) -> None:
         """
-        this is reliably called on both logout and disconnect
-        we notify the protocol here we lost the connection
+        Reliably called on both logout and disconnect. The protocol's
+        connectionLost is delivered by the session transport, so here we only
+        drop our reference to it.
         """
-        if self.protocol:
-            self.protocol.connectionLost("disconnected")
-            self.protocol = None
+        self.protocol = None
 
     def eofReceived(self) -> None:
         if self.protocol:

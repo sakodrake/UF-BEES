@@ -15,8 +15,10 @@ concurrent requests. The lock protects the _guests_ list, which
 contains references for each VM backend (in our case libvirt/QEMU
 instances)."""
 
-# Copyright (c) 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2019 Guilherme Borges <guilhermerosasborges@gmail.com>
+# SPDX-FileCopyrightText: 2021-2026 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
@@ -26,7 +28,7 @@ from dataclasses import dataclass
 from threading import Lock
 
 from twisted.internet import reactor, threads
-from twisted.python import log
+from twisted.logger import Logger
 
 import backend_pool.libvirt.backend_service
 import backend_pool.util
@@ -85,6 +87,8 @@ class PoolService:
     only by the single producer.
     """
 
+    _log = Logger()
+
     def __init__(self, nat_service):
         self.qemu = backend_pool.libvirt.backend_service.LibvirtBackendService()
         self.nat_service = nat_service
@@ -122,9 +126,8 @@ class PoolService:
         )
 
         if self.ssh_port == -1 and self.telnet_port == -1:
-            log.msg(
-                eventid="cowrie.backend_pool.service",
-                format="Invalid configuration: one of SSH or Telnet ports must be defined!",
+            self._log.error(
+                "Invalid configuration: one of SSH or Telnet ports must be defined!"
             )
             os._exit(1)
 
@@ -151,14 +154,14 @@ class PoolService:
             "backend_pool", "recycle_period", fallback=-1
         )
         if recycle_period > 0:
-            reactor.callLater(recycle_period, self.restart_pool)  # type: ignore[attr-defined]
+            reactor.callLater(recycle_period, self.restart_pool)
 
     def stop_pool(self) -> None:
         # lazy import to avoid exception if not using the backend_pool
         # and libvirt not installed (#1185)
         import libvirt
 
-        log.msg(eventid="cowrie.backend_pool.service", format="Trying pool clean stop")
+        self._log.info("Trying pool clean stop")
 
         # stop loop
         if self.loop_next_call:
@@ -173,9 +176,7 @@ class PoolService:
 
         # close any NAT sockets
         if (not self.local_pool and self.use_nat) or self.pool_only:
-            log.msg(
-                eventid="cowrie.backend_pool.service", format="Free all NAT bindings"
-            )
+            self._log.info("Free all NAT bindings")
             self.nat_service.free_all()
 
         try:
@@ -196,10 +197,7 @@ class PoolService:
             print("Not connected to QEMU")  # noqa: T201
 
     def restart_pool(self) -> None:
-        log.msg(
-            eventid="cowrie.backend_pool.service",
-            format="Refreshing pool, terminating current instances and rebooting",
-        )
+        self._log.info("Refreshing pool, terminating current instances and rebooting")
         self.stop_pool()
         self.start_pool()
 
@@ -266,9 +264,8 @@ class PoolService:
                 # (and guest.connected == 0) sometimes did not
                 # work correctly as some VMs are not signaled as freed
                 if timed_out:
-                    log.msg(
-                        eventid="cowrie.backend_pool.service",
-                        format="Guest %(guest_id)s (%(guest_ip)s) marked for deletion (timed-out)",
+                    self._log.info(
+                        "Guest {guest_id} ({guest_ip}) marked for deletion (timed-out)",
                         guest_id=guest.id,
                         guest_ip=guest.guest_ip,
                     )
@@ -285,9 +282,8 @@ class PoolService:
             )
             for guest in usable_guests:
                 if not self.has_connectivity(guest.guest_ip):
-                    log.msg(
-                        eventid="cowrie.backend_pool.service",
-                        format="Guest %(guest_id)s @ %(guest_ip)s has no connectivity... Destroying",
+                    self._log.info(
+                        "Guest {guest_id} @ {guest_ip} has no connectivity... Destroying",
                         guest_id=guest.id,
                         guest_ip=guest.guest_ip,
                     )
@@ -302,12 +298,8 @@ class PoolService:
             try:
                 self.qemu.destroy_guest(guest.domain, guest.snapshot)
                 guest.state = POOL_STATE_DESTROYED
-            except Exception as error:
-                log.err(
-                    eventid="cowrie.backend_pool.service",
-                    format="Error destroying guest: %(error)s",
-                    error=error,
-                )
+            except Exception:
+                self._log.failure("Error destroying guest")
 
     def __producer_remove_destroyed(self) -> None:
         """
@@ -331,9 +323,8 @@ class PoolService:
                 self.any_vm_up = True  # TODO fix for no VM available
                 guest.state = POOL_STATE_AVAILABLE
                 boot_time = int(time.time() - guest.start_timestamp)
-                log.msg(
-                    eventid="cowrie.backend_pool.service",
-                    format="Guest %(guest_id)s ready for connections @ %(guest_ip)s! (boot %(boot_time)ss)",
+                self._log.info(
+                    "Guest {guest_id} ready for connections @ {guest_ip}! (boot {boot_time}s)",
                     guest_id=guest.id,
                     guest_ip=guest.guest_ip,
                     boot_time=boot_time,
@@ -346,7 +337,11 @@ class PoolService:
         # replenish pool until full
         to_create = self.max_vm - self.existing_pool_size()
         for _ in range(to_create):
-            dom, snap, guest_ip = self.qemu.create_guest(self.is_ip_free)
+            created = self.qemu.create_guest(self.is_ip_free)
+            if created is None:
+                # backend not ready or libvirt failed; try again next loop
+                continue
+            dom, snap, guest_ip = created
 
             # create guest object
             self.guests.append(
@@ -393,7 +388,7 @@ class PoolService:
         self.__producer_mark_available()
 
         # sleep until next iteration
-        self.loop_next_call = reactor.callLater(  # type: ignore[attr-defined]
+        self.loop_next_call = reactor.callLater(
             self.loop_sleep_time, self.producer_loop
         )
 
@@ -442,7 +437,7 @@ class PoolService:
         if not guest:
             # TODO fix for no VM available
             if self.any_vm_up:
-                log.msg("Inconsistent state in pool, restarting...")
+                self._log.info("Inconsistent state in pool, restarting...")
                 self.stop_pool()
             raise NoAvailableVMs()
 

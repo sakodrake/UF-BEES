@@ -1,12 +1,14 @@
-# Copyright (c) 2009 Upi Tamminen <desaster@gmail.com>
-# See the COPYRIGHT file for more information
+# SPDX-FileCopyrightText: 2009-2011 Upi Tamminen <desaster@gmail.com>
+# SPDX-FileCopyrightText: 2014-2025 Michel Oosterhof <michel@oosterhof.net>
+#
+# SPDX-License-Identifier: BSD-3-Clause
 
 from __future__ import annotations
 
-import os
+import posixpath
 import tarfile
 
-from twisted.python import log
+from twisted.logger import Logger
 
 from cowrie.shell.command import HoneyPotCommand
 from cowrie.shell.fs import A_REALFILE
@@ -15,6 +17,8 @@ commands = {}
 
 
 class Command_tar(HoneyPotCommand):
+    _log = Logger()
+
     def mkfullpath(self, path: str, f: tarfile.TarInfo) -> None:
         components, d = path.split("/"), []
         while len(components):
@@ -23,8 +27,8 @@ class Command_tar(HoneyPotCommand):
             if p and not self.fs.exists(p):
                 self.fs.mkdir(
                     p,
-                    self.protocol.user.uid,
-                    self.protocol.user.gid,
+                    self.user["uid"],
+                    self.user["gid"],
                     4096,
                     f.mode,
                     f.mtime,
@@ -45,7 +49,7 @@ class Command_tar(HoneyPotCommand):
         if "v" in self.args[0]:
             verbose = True
 
-        path = self.fs.resolve_path(filename, self.protocol.cwd)
+        path = self.fs.resolve_path(filename, self.cwd)
         if not path or not self.protocol.fs.exists(path):
             self.errorWrite(
                 f"tar: {filename}: Cannot open: No such file or directory\n"
@@ -71,7 +75,7 @@ class Command_tar(HoneyPotCommand):
             return
 
         for f in t:
-            dest = self.fs.resolve_path(f.name.strip("/"), self.protocol.cwd)
+            dest = self.fs.resolve_path(f.name.strip("/"), self.cwd)
             if verbose:
                 self.write(f"{f.name}\n")
             if not extract or not len(dest):
@@ -79,24 +83,24 @@ class Command_tar(HoneyPotCommand):
             if f.isdir():
                 self.fs.mkdir(
                     dest,
-                    self.protocol.user.uid,
-                    self.protocol.user.gid,
+                    self.user["uid"],
+                    self.user["gid"],
                     4096,
                     f.mode,
                     f.mtime,
                 )
             elif f.isfile():
-                self.mkfullpath(os.path.dirname(dest), f)
+                self.mkfullpath(posixpath.dirname(dest), f)
                 self.fs.mkfile(
                     dest,
-                    self.protocol.user.uid,
-                    self.protocol.user.gid,
+                    self.user["uid"],
+                    self.user["gid"],
                     f.size,
                     f.mode,
                     f.mtime,
                 )
             else:
-                log.msg(f"tar: skipping [{f.name}]")
+                self._log.info("tar: skipping [{name}]", name=f.name)
 
 
 commands["/bin/tar"] = Command_tar
